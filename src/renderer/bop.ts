@@ -1,6 +1,6 @@
 import * as utils from '../utils';
 import * as ts from "typescript";
-import { CodeBinaryOperator, CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeStatementWriter, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
+import { CodeBinaryOperator, CodeFunctionWriter, CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeStatementWriter, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
 
 
 
@@ -40,10 +40,18 @@ class BopGenericFunction {
   ) {}
 }
 
+class BopPropertyAccessor {
+  constructor(
+    public readonly getter: BopVariable,
+    public readonly setter: BopVariable,
+  ) {}
+}
+
 class BopVariable {
   result?: CodeVariable;
   typeResult?: BopType;
   genericFunctionResult?: BopGenericFunction;
+  propertyResult?: BopPropertyAccessor;
 
   constructor(
     public readonly nameHint: string,
@@ -77,6 +85,11 @@ class BopBlock {
     return newBlock;
   }
 
+  createTempBlock(scopeType: CodeScopeType) {
+    const newBlock = new BopBlock(scopeType, this);
+    return newBlock;
+  }
+
   static createGlobalBlock() {
     return new BopBlock(CodeScopeType.Global, undefined);
   }
@@ -107,6 +120,7 @@ enum BopIdentifierPrefix {
   Field = 'f',
   Local = 'v',
   Struct = 's',
+  Extern = 'extern',
 }
 
 class BopReference {
@@ -226,6 +240,19 @@ class BopType {
 
 type BopFields = Array<{ type: BopType, identifier: string }>;
 
+type BopInternalTypeBuilder = {
+  type: BopType,
+  declareField(identifier: string, type: BopType): BopVariable,
+  declareConstructor(params: BopFields): CodeFunctionWriter,
+  declareMethod(identifier: string, params: BopFields, returnType: BopType): CodeFunctionWriter,
+  declareInternalField(identifier: string, type: BopType): void,
+  declareInternalConstructor(params: BopFields, internalIdentifier: string): void,
+  declareInternalMethod(identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType): void,
+  declareGenericMethod(identifier: string, genericFunc: BopGenericFunction): void,
+  declareInternalProperty(identifier: string, type: BopType): BopVariable,
+};
+
+
 
 
 
@@ -269,9 +296,529 @@ class BopProcessor {
     this.typeType = this.createPrimitiveType(CodeTypeSpec.typeType);
     this.typeMap.set(this.tc.getVoidType(), this.voidType = this.createPrimitiveType(CodeTypeSpec.voidType));
     this.typeMap.set(this.tc.getBooleanType(), this.booleanType = this.createPrimitiveType(CodeTypeSpec.boolType));
-    this.typeMap.set(this.tc.getNumberType(), this.intType = this.createPrimitiveType(CodeTypeSpec.intType));
-    this.undefinedType = this.createInternalType({ identifier: 'UndefinedType', fields: [], anonymous: true });
+    this.undefinedType = this.createInternalType({ identifier: 'UndefinedType', anonymous: true }).type;
     this.undefinedConstant = this.createInternalConstant({ identifier: 'undefined', internalIdentifier: 'kUndefinedValue', type: this.undefinedType });
+
+    const bopLibRoot = program.getSourceFile('default.d.ts');
+
+    {
+      // type ResolvedType = { name: string, typeArgs: ResolvedType[] };
+      type ResolvedType = { name?: string, bopType?: BopType, typeArgs: ResolvedType[] };
+      type TypeResolver = (typeArgs: ResolvedType[]) => ResolvedType;
+      type MethodParameterTypeResolver = (typeTypeArgs: ResolvedType[], methodTypeArgs: ResolvedType[]) => ResolvedType;
+      type PropertyResolver = () => BopType;
+      type TypeInfo = {
+        name: string,
+        typeParameters: string[],
+        expandFrom: Array<{ typeName: string, typeArgs: TypeResolver[], asStatic: boolean }>,
+        methods: Array<{
+          name: string,
+          typeParameters: string[],
+          parameters: Array<{ name: string, type: MethodParameterTypeResolver }>,
+          returnType: MethodParameterTypeResolver,
+          isConstructor: boolean,
+          isStatic: boolean,
+        }>,
+        properties: { name: string, type: TypeResolver}[],
+      };
+
+      const errorType = { name: 'error', typeArgs: [] };
+      const remappedTypes = new Map<string, string>([
+        [ 'Swizzlable2<boolean>', 'boolean2' ],
+        [ 'Swizzlable2<int>', 'int2' ],
+        [ 'Swizzlable2<float>', 'float2' ],
+        [ 'Swizzlable3<boolean>', 'boolean3' ],
+        [ 'Swizzlable3<int>', 'int3' ],
+        [ 'Swizzlable3<float>', 'float3' ],
+        [ 'Swizzlable4<boolean>', 'boolean4' ],
+        [ 'Swizzlable4<int>', 'int4' ],
+        [ 'Swizzlable4<float>', 'float4' ],
+      ]);
+
+      const toStringResolvedType = (type: ResolvedType) => {
+        let result = type.name ?? type.bopType?.debugName ?? 'unknown';
+        if (type.typeArgs.length > 0) {
+          result += `<${type.typeArgs.map(t => toStringResolvedType(t)).join(', ')}>`;
+        }
+        return result;
+      };
+      const resolveStaticType = (typeNode: ts.TypeNode): ResolvedType => {
+        if (!ts.isTypeReferenceNode(typeNode)) {
+          return errorType;
+        }
+        const typeName = typeNode.typeName.getText();
+        const typeArgs = (typeNode.typeArguments ?? []).map(t => resolveStaticType(t));
+
+        const foundBaseType = libTypes.get(typeName);
+        if (!foundBaseType) {
+          return errorType;
+        }
+        const result = { name: foundBaseType.name, typeArgs: typeArgs };
+
+        const foundRemapped = remappedTypes.get(toStringResolvedType(result));
+        if (foundRemapped) {
+          const remapToType = libTypes.get(foundRemapped);
+          if (!remapToType) {
+            return errorType;
+          }
+          return { name: remapToType.name, typeArgs: [] };
+        }
+        return result;
+      }
+
+      const libTypes = new Map<string, TypeInfo>();
+      const libConstructorDecls: Array<{ typeName: string, constructorTypeResolver: () => ResolvedType }> = [];
+      for (const statement of bopLibRoot?.statements ?? []) {
+        if (ts.isInterfaceDeclaration(statement)) {
+          const typeName = statement.name.text;
+          let foundType = libTypes.get(typeName);
+          if (!foundType) {
+            foundType = {
+              name: typeName,
+              typeParameters: (statement.typeParameters ?? []).map(t => t.name.text),
+              expandFrom: [],
+              methods: [],
+              properties: [],
+            };
+            libTypes.set(typeName, foundType);
+          }
+          const type = foundType;
+
+          const typeParameterMap = new Map<string, number>();
+          for (let i = 0; i < type.typeParameters.length; ++i) {
+            typeParameterMap.set(type.typeParameters[i], i);
+          }
+
+          const makeTypeResolver = (typeNode: ts.TypeNode, otherResolver?: (identifier: string) => ResolvedType|undefined): TypeResolver => {
+            if (ts.isUnionTypeNode(typeNode)) {
+              return (typeArgs) => {
+                const typeArgBlock = this.globalBlock.createTempBlock(CodeScopeType.Class);
+                for (const [typeParameterName, index] of typeParameterMap) {
+                  const typeArg = typeArgs[index];
+                  const typeArgType = resolveNewBopType(typeArg);
+                  typeArgBlock.mapIdentifier(typeParameterName, CodeTypeSpec.typeType, this.typeType).typeResult = typeArgType;
+                }
+                return utils.upcast({ bopType: this.resolveType(this.tc.getTypeAtLocation(typeNode), typeArgBlock), typeArgs: [] })
+              };
+            }
+            const existingType = this.typeMap.get(this.tc.getTypeFromTypeNode(typeNode));
+            if (existingType) {
+              return () => utils.upcast({ bopType: existingType, typeArgs: [] });
+            }
+            if (!ts.isTypeReferenceNode(typeNode)) {
+              return () => errorType;
+            }
+            const typeName = typeNode.typeName.getText();
+            const typeParamIndex = typeParameterMap.get(typeName);
+            const typeArgResolvers = (typeNode.typeArguments ?? []).map(t => makeTypeResolver(t, otherResolver));
+            return (typeArgs: ResolvedType[]) => {
+              const otherResolved = otherResolver?.(typeName);
+              if (otherResolved) {
+                return otherResolved;
+              }
+              if (typeParamIndex !== undefined) {
+                const resolvedAsTypeArg = typeArgs.at(typeParamIndex);
+                if (typeArgResolvers.length > 0) {
+                  return errorType;
+                }
+                return resolvedAsTypeArg ?? errorType;
+              }
+
+              const foundBaseType = libTypes.get(typeName);
+              if (!foundBaseType) {
+                return errorType;
+              }
+              const refTypeArgs = typeArgResolvers.map(e => e(typeArgs));
+              const result = { name: foundBaseType.name, typeArgs: refTypeArgs };
+
+              const foundRemapped = remappedTypes.get(toStringResolvedType(result));
+              if (foundRemapped) {
+                const remapToType = libTypes.get(foundRemapped);
+                if (!remapToType) {
+                  return errorType;
+                }
+                return { name: remapToType.name, typeArgs: [] };
+              }
+              return result;
+            };
+          };
+
+          for (const inherits of statement.heritageClauses ?? []) {
+            for (const inheritExpr of inherits.types) {
+              type.expandFrom.push({
+                typeName: inheritExpr.expression.getText(),
+                typeArgs: (inheritExpr.typeArguments ?? []).map(t => makeTypeResolver(t)),
+                asStatic: false,
+              });
+            }
+          }
+
+          for (const member of statement.members) {
+            if (ts.isMethodSignature(member) ||
+                ts.isConstructSignatureDeclaration(member)) {
+              const isConstructor = ts.isConstructSignatureDeclaration(member);
+              const methodTypeParameters = (member.typeParameters ?? []).map(t => t.name.text);
+              const methodTypeParameterMap = new Map<string, number>();
+              for (let i = 0; i < methodTypeParameters.length; ++i) {
+                methodTypeParameterMap.set(methodTypeParameters[i], i);
+              }
+
+              const makeMethodTypeResolver = (typeNode: ts.TypeNode|undefined): MethodParameterTypeResolver => {
+                if (!typeNode) {
+                  return () => errorType;
+                }
+                let innerMethodTypeArgs: ResolvedType[];
+                const innerResolver = makeTypeResolver(typeNode, identifier => {
+                  const methodTypeParameterIndex = methodTypeParameterMap.get(identifier);
+                  if (methodTypeParameterIndex !== undefined) {
+                    return innerMethodTypeArgs!.at(methodTypeParameterIndex);
+                  }
+                  return undefined;
+                });
+                return (typeTypeArgs: ResolvedType[], methodTypeArgs: ResolvedType[]) => {
+                  innerMethodTypeArgs = methodTypeArgs;
+                  return innerResolver(typeTypeArgs);
+                };
+              };
+
+              const parameters = member.parameters.map(p => utils.upcast({
+                name: p.name.getText(),
+                type: makeMethodTypeResolver(p.type!),
+              }));
+              const returnType = makeMethodTypeResolver(member.type);
+
+              const propName = isConstructor ? 'constructor' : member.name.getText();
+              type.methods.push({
+                name: propName,
+                typeParameters: methodTypeParameters,
+                parameters: parameters,
+                returnType: returnType,
+                isConstructor: isConstructor,
+                isStatic: false,
+              });
+            } else if (ts.isPropertySignature(member)) {
+              // TODO: Handle static properties.
+              if (!member.type || !ts.isTypeReferenceNode(member.type)) {
+                continue;
+              }
+              const propName = member.name.getText();
+              type.properties.push({
+                name: propName,
+                type: makeTypeResolver(member.type),
+              });
+            }
+          }
+        } else if (ts.isVariableStatement(statement)) {
+          if (!statement.modifiers?.some(m => m.kind === ts.SyntaxKind.DeclareKeyword)) {
+            continue;
+          }
+          for (const decl of statement.declarationList.declarations) {
+            if (!decl.type) {
+              continue;
+            }
+            if (!ts.isTypeReferenceNode(decl.type)) {
+              continue;
+            }
+            const intoTypeName = decl.name.getText();
+            const typeArgs = (decl.type.typeArguments ?? []);
+            libConstructorDecls.push({
+              typeName: intoTypeName,
+              constructorTypeResolver: () => {
+                return resolveStaticType(decl.type!);
+              },
+            });
+          }
+        }
+      }
+
+      for (const constructorDecls of libConstructorDecls) {
+        const type = libTypes.get(constructorDecls.typeName);
+        if (!type) {
+          continue;
+        }
+        const fromType = constructorDecls.constructorTypeResolver();
+        type.expandFrom.push({
+          typeName: fromType.name!,
+          typeArgs: fromType.typeArgs.map(t => () => t),
+          asStatic: true,
+        });
+      }
+
+      const expandFromRec = (intoType: TypeInfo, fromTypes: Array<{ typeName: string, typeArgs: TypeResolver[], asStatic: boolean }>) => {
+        for (const entry of fromTypes) {
+          const fromTypeName = entry.typeName;
+          const fromType = libTypes.get(fromTypeName);
+          if (!fromType) {
+            continue;
+          }
+
+          const translateTypeResolver = (inner: TypeResolver): TypeResolver => {
+            return (typeArgs: ResolvedType[]): ResolvedType => {
+              return inner(entry.typeArgs.map(a => a(typeArgs)));
+            };
+          };
+          const translateMethodTypeResolver = (inner: MethodParameterTypeResolver): MethodParameterTypeResolver => {
+            return (typeTypeArgs: ResolvedType[], methodTypeArgs: ResolvedType[]): ResolvedType => {
+              return inner(entry.typeArgs.map(a => a(typeTypeArgs)), methodTypeArgs);
+            };
+          };
+
+          for (const method of fromType.methods) {
+            intoType.methods.push({
+              name: method.name,
+              typeParameters: method.typeParameters,
+              parameters: method.parameters.map(p => utils.upcast({
+                name: p.name,
+                type: translateMethodTypeResolver(p.type),
+              })),
+              returnType: translateMethodTypeResolver(method.returnType),
+              isConstructor: method.isConstructor,
+              isStatic: method.isStatic || entry.asStatic,
+            });
+          }
+
+          for (const prop of fromType.properties) {
+            intoType.properties.push({
+              name: prop.name,
+              type: translateTypeResolver(prop.type),
+            });
+          }
+
+          expandFromRec(intoType, fromType.expandFrom);
+        }
+      };
+      for (const type of libTypes.values()) {
+        expandFromRec(type, type.expandFrom);
+      }
+
+
+
+      const newBopTypeMap = new Map<string, { bopType?: BopType, genericInstantiator?: (typeArgs: ResolvedType[]) => BopType }>();
+      const newConcreteTypes: Array<() => void> = [];
+      const resolveNewBopType = (resolved: ResolvedType): BopType|undefined =>  {
+        if (resolved.bopType) {
+          return resolved.bopType;
+        }
+        if (!resolved.name) {
+          return undefined;
+        }
+        const newType = newBopTypeMap.get(resolved.name);
+        if (!newType) {
+          return undefined;
+        }
+        if (newType.bopType) {
+          return newType.bopType;
+        }
+        if (newType.genericInstantiator) {
+          return newType.genericInstantiator(resolved.typeArgs);
+        }
+        return undefined;
+      };
+      const resolveMethodParamType = (p: MethodParameterTypeResolver, typeTypeArgs: ResolvedType[], methodTypeArgs: ResolvedType[]): BopType|undefined => {
+        const resolved = p(typeTypeArgs, methodTypeArgs);
+        return resolveNewBopType(resolved);
+      };
+
+
+      for (const type of libTypes.values()) {
+        const instantiateIntoType = (instantiatedTypeName: string, newType: BopInternalTypeBuilder, typeArgs: ResolvedType[]): BopType => {
+          const instantiatedType = newType.type;
+          for (const method of type.methods) {
+            const methodName = method.name;
+            const debugMethodName = `${instantiatedTypeName}::${methodName}`;
+
+            if (method.typeParameters.length === 0 || method.isConstructor) {
+              const methodTypeArgs: ResolvedType[] = [];
+              const params: BopFields = method.parameters.map(p => {
+                const paramType = resolveMethodParamType(p.type, typeArgs, methodTypeArgs);
+                return { identifier: p.name, type: paramType ?? this.errorType };
+              });
+              let returnType: BopType|undefined;
+              if (method.isConstructor) {
+                returnType = newType.type;
+              } else {
+                returnType = resolveMethodParamType(method.returnType, typeArgs, methodTypeArgs) ?? this.errorType;
+              }
+              if (method.isConstructor) {
+                newType.declareInternalConstructor(params, debugMethodName);
+              } else {
+                newType.declareInternalMethod(method.name, debugMethodName, params, returnType);
+              }
+            } else {
+              const genericFunc = new BopGenericFunction((typeParameters: BopFields) => {
+                const isMethod = true;
+
+                // Resolve generic params into concrete ones now that we have all type args.
+                const methodTypeArgs: ResolvedType[] = typeParameters.map(t => utils.upcast({ bopType: t.type, typeArgs: [] }));
+                const paramDecls: BopFields = method.parameters.map(p => {
+                  const paramType = resolveMethodParamType(p.type, typeArgs, methodTypeArgs);
+                  return { identifier: p.name, type: paramType ?? this.errorType };
+                });
+                if (isMethod) {
+                  paramDecls.splice(0, 0, { identifier: 'this', type: instantiatedType });
+                }
+                const returnType = resolveMethodParamType(method.returnType, typeArgs, methodTypeArgs) ?? this.errorType;
+
+                // Create the BopType to represent the concrete function, and map it in the global scope.
+                const debugInstantiatedMethodName = `${debugMethodName}<${methodTypeArgs.map(t => toStringResolvedType(t)).join(',')}>`;
+                const newFunctionType = BopType.createFunctionType({
+                  debugName: debugInstantiatedMethodName,
+                  innerScope: this.writer.global.scope.createChildScope(CodeScopeType.Local),
+                  innerBlock: this.globalBlock.createChildBlock(CodeScopeType.Local),
+                  functionOf: new BopFunctionType(
+                    paramDecls,
+                    returnType,
+                    isMethod,
+                  ),
+                });
+
+                const concreteFunctionVar = this.globalBlock.mapTempIdentifier(debugInstantiatedMethodName, newFunctionType, /* anonymous */ true);
+                const concreteFunctionIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, debugInstantiatedMethodName);
+                concreteFunctionVar.result = concreteFunctionIdentifier;
+
+                // Write the trampoline function body.
+                const funcScope = this.writer.global.scope.createChildScope(CodeScopeType.Function);
+                const func = this.writer.global.writeFunction(concreteFunctionIdentifier.identifierToken);
+                func.returnTypeSpec = returnType.storageType;
+                const paramVars: CodeVariable[] = [];
+                for (const param of paramDecls) {
+                  const paramVar = funcScope.allocateVariableIdentifier(param.type.assignableRefType, BopIdentifierPrefix.Local, param.identifier);
+                  func.addParam(paramVar.typeSpec, paramVar.identifierToken);
+                  paramVars.push(paramVar);
+                }
+                const externIdentifier = funcScope.allocateIdentifier(BopIdentifierPrefix.Extern, debugInstantiatedMethodName);
+                const externFuncCall = func.body.writeExpressionStatement().expr.writeStaticFunctionCall(externIdentifier);
+                for (const typeArg of methodTypeArgs) {
+                  let typeArgType: CodeTypeSpec|undefined;
+                  // TODO: Fix this crude resolution.
+                  if (typeArg.name) {
+                    typeArgType = resolveNewBopType({ name: typeArg.name, typeArgs: [] })?.storageType;
+                  } else {
+                    typeArgType = typeArg.bopType?.storageType;
+                  }
+                  typeArgType ??= CodeTypeSpec.compileErrorType;
+                  externFuncCall.addTemplateArg(typeArgType);
+                }
+                for (const param of paramVars) {
+                  externFuncCall.addArg().writeVariableReference(param);
+                }
+                this.writer.mapInternalToken(externIdentifier, debugMethodName);
+
+                return concreteFunctionVar;
+              });
+              newType.declareGenericMethod(methodName, genericFunc);
+            }
+          }
+
+          for (const propDecl of type.properties) {
+            const propName = propDecl.name;
+            const propType = resolveNewBopType(propDecl.type(typeArgs)) ?? this.errorType;
+            const propVar = newType.declareInternalProperty(propName, propType);
+
+            const getterName = `${instantiatedTypeName}::get_${propName}`;
+            const setterName = `${instantiatedTypeName}::set_${propName}`;
+
+            const getterType = BopType.createFunctionType({
+              debugName: getterName,
+              innerScope: newType.type.innerScope.createChildScope(CodeScopeType.Local),
+              innerBlock: newType.type.innerBlock.createChildBlock(CodeScopeType.Local),
+              functionOf: new BopFunctionType(
+                [],
+                propType,
+                /* isMethod */ true,
+              ),
+            });
+            const getterBopVar = newType.type.innerBlock.mapIdentifier(getterType.debugName, getterType.tempType, getterType, /* anonymous */ true);
+            const getterVar = newType.type.innerScope.createVariableInScope(getterBopVar.type, getterBopVar.nameHint);
+            getterBopVar.result = getterVar;
+            this.writer.mapInternalToken(getterVar.identifierToken, getterName);
+
+            const setterType = BopType.createFunctionType({
+              debugName: setterName,
+              innerScope: newType.type.innerScope.createChildScope(CodeScopeType.Local),
+              innerBlock: newType.type.innerBlock.createChildBlock(CodeScopeType.Local),
+              functionOf: new BopFunctionType(
+                [{ identifier: 'value', type: propType }],
+                this.voidType,
+                /* isMethod */ true,
+              ),
+            });
+            const setterBopVar = newType.type.innerBlock.mapIdentifier(setterType.debugName, setterType.tempType, setterType, /* anonymous */ true);
+            const setterVar = newType.type.innerScope.createVariableInScope(setterBopVar.type, setterBopVar.nameHint);
+            setterBopVar.result = setterVar;
+            this.writer.mapInternalToken(setterVar.identifierToken, setterName);
+
+            propVar.propertyResult = new BopPropertyAccessor(getterBopVar, setterBopVar);
+          }
+
+          return instantiatedType;
+        }
+
+        if (type.typeParameters.length > 0) {
+          const baseTypeToken = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, type.name);
+          this.writer.mapInternalToken(baseTypeToken, type.name);
+
+          let instanceIndex = 0;
+          this.createInternalGenericType({
+            identifier: type.name,
+            writer: (typeArgs: BopFields) => {
+              // Create typedef.
+              const instantiatedTypeName = `BopLib_${type.name}_${instanceIndex}`;
+              instanceIndex++;
+
+              const typedefType = CodeTypeSpec.fromStruct(baseTypeToken).withTypeArgs(typeArgs.map(t => t.type.storageType));
+              const typedefIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, instantiatedTypeName);
+              this.writer.global.writeTypedef(typedefIdentifier, typedefType);
+              this.writer.mapInternalToken(typedefIdentifier, instantiatedTypeName);
+
+              // Instantiate the type.
+              const translatedTypeArgs = typeArgs.map(typeArg => utils.upcast({ bopType: typeArg.type, typeArgs: [] }));
+              const newType = this.createInternalType({
+                identifier: type.name,
+                internalIdentifier: instantiatedTypeName,
+                anonymous: true,
+              });
+              newBopTypeMap.set(type.name, { bopType: newType.type });
+              instantiateIntoType(instantiatedTypeName, newType, translatedTypeArgs);
+              return newType.type;
+            },
+          });
+        } else {
+          const typeName = `BopLib::${type.name}`;
+          const newType = this.createInternalType({
+            identifier: type.name,
+            internalIdentifier: typeName,
+          });
+          newBopTypeMap.set(type.name, { bopType: newType.type });
+          newConcreteTypes.push(() => instantiateIntoType(typeName, newType, []));
+        }
+      }
+      newConcreteTypes.forEach(f => f());
+
+      this.intType = newBopTypeMap.get('int')!.bopType!;
+      this.typeMap.set(this.tc.getNumberType(), this.intType);
+
+
+
+      for (const type of libTypes.values()) {
+        const typeArgs = type.typeParameters.map(t => utils.upcast({ name: t, typeArgs: [] }));
+        const typeName = toStringResolvedType({ name: type.name, typeArgs });
+        for (const prop of type.properties) {
+          const propType = prop.type(typeArgs);
+          console.log(`${typeName}.${prop.name}: ${toStringResolvedType(propType)}`);
+        }
+        for (const method of type.methods) {
+          const methodTypeArgs = method.typeParameters.map(t => utils.upcast({ name: t, typeArgs: [] }));
+          let methodName = method.name;
+          if (methodTypeArgs.length > 0) {
+            methodName += `<${methodTypeArgs.map(toStringResolvedType).join(', ')}>`;
+          }
+          console.log(`${typeName}.${methodName}(${method.parameters.map(p => `${p.name}: ${toStringResolvedType(p.type(typeArgs, methodTypeArgs))}`).join(', ')}): ???`);
+        }
+      }
+
+      console.log(Array.from(libTypes.values()));
+    }
 
     this.scopeReturnType = this.errorType;
 
@@ -326,24 +873,38 @@ class BopProcessor {
     });
   }
 
+  private createInternalGenericType(options: {
+    identifier: string,
+    writer: (typeParameters: BopFields) => BopType,
+  }) {
+    this.internalGenericTypeMap.set(options.identifier, options.writer);
+  }
+
   private createInternalType(options: {
     identifier: string,
     internalIdentifier?: string,
-    fields: BopFields,
     anonymous?: boolean,
-  }): BopType {
-    const typeBopVar = this.globalBlock.mapStorageIdentifier(options.identifier, this.typeType, options.anonymous);
+  }): BopInternalTypeBuilder {
+    const typeBopVar = this.globalBlock.mapStorageIdentifier(options.identifier, this.typeType, /* anonymous */ true);
     const typeVar = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.typeType, BopIdentifierPrefix.Struct, options.identifier);
     const innerScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
     const innerBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
     this.writer.mapInternalToken(typeVar.identifierToken, options.internalIdentifier ?? options.identifier);
 
-    for (const field of options.fields) {
-      const fieldBopVar = innerBlock.mapIdentifier(field.identifier, field.type.storageType, field.type);
-      const fieldVar = innerScope.allocateVariableIdentifier(fieldBopVar.type, BopIdentifierPrefix.Field, field.identifier);
+    const declareField = (identifier: string, type: BopType) => {
+      const fieldBopVar = innerBlock.mapIdentifier(identifier, type.storageType, type);
+      const fieldVar = innerScope.allocateVariableIdentifier(fieldBopVar.type, BopIdentifierPrefix.Field, identifier);
       fieldBopVar.result = fieldVar;
-      this.writer.mapInternalToken(fieldVar.identifierToken, field.identifier);
-    }
+      this.writer.mapInternalToken(fieldVar.identifierToken, identifier);
+      return fieldBopVar;
+    };
+
+    const declareInternalProperty = (identifier: string, type: BopType) => {
+      const fieldBopVar = innerBlock.mapIdentifier(identifier, type.storageType, type);
+      const fieldVar = innerScope.allocateVariableIdentifier(fieldBopVar.type, BopIdentifierPrefix.Field, identifier);
+      this.writer.mapInternalToken(fieldVar.identifierToken, identifier);
+      return fieldBopVar;
+    };
 
     const newType = BopType.createPassByValue({
         debugName: options.identifier,
@@ -352,8 +913,95 @@ class BopProcessor {
         innerBlock: innerBlock,
     });
     typeBopVar.typeResult = newType;
-    return newType;
+
+    if (!options.anonymous) {
+      this.internalTypes.set(options.identifier, newType);
+    }
+
+    const declareFunction = (identifier: string, params: BopFields, returnType: BopType, options: { includeThis: boolean }) => {
+      const debugName = `${newType.debugName}.${identifier}`;
+      const funcIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Constructor, debugName);
+      const funcType = BopType.createFunctionType({
+        debugName: debugName,
+        innerScope: innerScope.createChildScope(CodeScopeType.Local),
+        innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
+        functionOf: new BopFunctionType(
+          params,
+          newType,
+          /* isMethod */ options.includeThis,
+        ),
+      });
+
+      innerBlock.mapIdentifier(identifier, funcIdentifier.typeSpec, funcType).result = funcIdentifier;
+      const funcWriter = this.writer.global.writeFunction(funcIdentifier.identifierToken);
+      funcWriter.returnTypeSpec = returnType.storageType;
+      return funcWriter;
+    };
+
+    const declareMethod = (identifier: string, params: BopFields, returnType: BopType) => {
+      return declareFunction(identifier, params, returnType, { includeThis: true });
+    };
+
+    const declareConstructor = (params: BopFields) => {
+      return declareFunction('constructor', params, newType, { includeThis: false });
+    };
+
+    const declareInternalField = (identifier: string, type: BopType) => {
+      const fieldBopVar = innerBlock.mapIdentifier(identifier, type.storageType, type);
+      const fieldVar = innerScope.allocateVariableIdentifier(fieldBopVar.type, BopIdentifierPrefix.Field, identifier);
+      fieldBopVar.result = fieldVar;
+      this.writer.mapInternalToken(fieldVar.identifierToken, identifier);
+      return fieldBopVar;
+    };
+
+    const declareInternalFunction = (identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType, options: { includeThis: boolean }) => {
+      const debugName = `${newType.debugName}.${identifier}`;
+      const funcIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Method, debugName);
+      const funcType = BopType.createFunctionType({
+        debugName: debugName,
+        innerScope: innerScope.createChildScope(CodeScopeType.Local),
+        innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
+        functionOf: new BopFunctionType(
+          params,
+          returnType,
+          /* isMethod */ options.includeThis,
+        ),
+      });
+
+      innerBlock.mapIdentifier(identifier, funcIdentifier.typeSpec, funcType).result = funcIdentifier;
+      this.writer.mapInternalToken(funcIdentifier.identifierToken, internalIdentifier);
+      return;
+    };
+
+    const declareInternalMethod = (identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType) => {
+      return declareInternalFunction(identifier, internalIdentifier, params, returnType, { includeThis: true });
+    };
+
+    const declareInternalConstructor = (params: BopFields, internalIdentifier: string) => {
+      return declareInternalFunction('constructor', internalIdentifier, params, newType, { includeThis: false });
+    };
+
+    const declareGenericMethod = (identifier: string, genericFunc: BopGenericFunction) => {
+      const debugName = `${newType.debugName}.${identifier}`;
+      const funcIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Method, debugName);
+      innerBlock.mapTempIdentifier(identifier, this.functionType).genericFunctionResult = genericFunc;
+      return;
+    };
+
+    return {
+      type: newType,
+      declareField,
+      declareMethod,
+      declareConstructor,
+      declareInternalField,
+      declareInternalMethod,
+      declareInternalConstructor,
+      declareGenericMethod,
+      declareInternalProperty,
+    };
   }
+
+
 
   private createInternalConstant(options: {
     identifier: string,
@@ -394,7 +1042,6 @@ class BopProcessor {
         error = errorFormatter();
       }
       this.logAssert(error);
-      console.log(error);
     }
     return cond;
   }
@@ -441,99 +1088,6 @@ class BopProcessor {
           }
           const newType = this.resolveType(this.tc.getTypeAtLocation(statement));
         } else if (ts.isFunctionDeclaration(statement)) {
-      //     if (!this.verifyNotNulllike(statement.name, `Anonymous functions not supported.`)) {
-      //       return;
-      //     }
-      //     if (!this.verifyNotNulllike(statement.body, `Function has no body.`)) {
-      //       return;
-      //     }
-      //     const funcName = statement.name.text;
-
-      //     const funcType = this.tc.getTypeAtLocation(statement);
-      //     const signature = this.tc.getSignaturesOfType(funcType, ts.SignatureKind.Call).at(0);
-      //     if (!this.verifyNotNulllike(signature, `Function has unknown signature.`)) {
-      //       return;
-      //     }
-
-      //     const instantiateFunc = (typeParameters: BopFields, anonymous: boolean): BopVariable => {
-      //       const paramDecls: BopFields = [];
-      //       const params: BopVariable[] = [];
-      //       let body: BopBlock;
-
-      //       const functionBlock = block.createChildBlock(CodeScopeType.Function);
-      //       for (const param of typeParameters) {
-      //         functionBlock.mapTempIdentifier(param.identifier, this.typeType).typeResult = param.type;
-      //       }
-      //       for (const param of signature.parameters) {
-      //         const paramType = this.resolveType(this.tc.getTypeOfSymbol(param), functionBlock);
-      //         paramDecls.push({ type: paramType, identifier: param.name });
-      //         params.push(functionBlock.mapTempIdentifier(param.name, paramType));
-      //       }
-      //       const returnType = this.resolveType(signature.getReturnType(), functionBlock);
-
-      //       const newFunctionType = BopType.createFunctionType({
-      //         debugName: funcName,
-      //         innerScope: this.writer.global.scope.createChildScope(CodeScopeType.Local),
-      //         innerBlock: block.createChildBlock(CodeScopeType.Local),
-      //         functionOf: new BopFunctionType(
-      //           paramDecls,
-      //           returnType,
-      //           /* isMethod */ false,
-      //         ),
-      //       });
-
-      //       const concreteFunctionVar = block.mapTempIdentifier(funcName, newFunctionType, anonymous ?? true);
-      //       const concreteFunctionIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, funcName);
-      //       concreteFunctionVar.result = concreteFunctionIdentifier;
-
-      //       this.pushBlockGenerator(block, {
-      //         unrollBlocks: () => {
-      //           // Map type parameters.
-      //           const oldBlock = this.block;
-      //           this.block = functionBlock;
-      //           body = this.visitInBlock(statement.body!, CodeScopeType.Function);
-      //           this.block = oldBlock;
-      //         },
-      //         produceResult: () => {
-      //           const ret = this.writer.global.writeFunction(concreteFunctionIdentifier.identifierToken);
-
-      //           ret.returnTypeSpec = returnType.tempType;
-      //           for (const param of params) {
-      //             param.result = ret.body.scope.createVariableInScope(param.type, param.nameHint);
-      //             ret.addParam(param.type, param.result.identifierToken);
-      //           }
-
-      //           const oldReturnType = this.scopeReturnType;
-      //           this.scopeReturnType = returnType;
-      //           this.writeBlock(body, ret.body);
-      //           this.scopeReturnType = oldReturnType;
-
-      //           return {};
-      //         },
-      //       });
-      //       return concreteFunctionVar;
-      //     };
-
-      //     if (statement.typeParameters) {
-      //       const genericFunctionVar = block.mapTempIdentifier(funcName, this.functionType);
-      //       const genericFunctionIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, funcName);
-      //       genericFunctionVar.result = genericFunctionIdentifier;
-
-      //       genericFunctionVar.genericFunctionResult = new BopGenericFunction((typeParameters: BopFields) => {
-      //         return instantiateFunc(typeParameters, /* anonymous */ true);
-      //       });
-      //     } else {
-      //       // const concreteParams: BopFields = [];
-      //       // for (const param of signature.getParameters()) {
-      //       //   const paramDecl = param.declarations?.at(0);
-      //       //   if (!this.verifyNotNulllike(paramDecl, `Cannot determine type for parameter ${param.name}.`)) {
-      //       //     return;
-      //       //   }
-      //       //   const paramType = this.resolveType(this.tc.getTypeAtLocation(paramDecl));
-      //       //   concreteParams.push({ identifier: param.name, type: paramType });
-      //       // }
-      //       instantiateFunc([], /* anonymous */ false);
-      //     }
           this.declareFunction(statement, undefined, this.globalBlock, this.globalBlock);
         } else {
           this.logAssert(`Unsupported ${getNodeLabel(statement)} at global scope.`);
@@ -614,16 +1168,29 @@ class BopProcessor {
 
       return {
         produceResult: () => {
+          const [value, valueRef] = this.writeCoersionFromExprPair(valueExpr, this.errorType, this.blockWriter);
+
+          const refResult = this.readFullResult(refExpr);
+          const propAccessor = refResult?.expressionResult?.propertyResult;
+          if (propAccessor) {
+            // This is calling a setter property.
+            const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.setter, thisVar: refResult.thisResult }), [value]);
+            if (!callBop) {
+              return;
+            }
+            this.doProduceResult(callBop);
+            return { expressionResult: valueRef };
+          }
+
           const oldAsAssignableRef = this.asAssignableRef;
           this.asAssignableRef = true;
           const [ref, refVar] = this.writeCoersionFromExprPair(refExpr, this.errorType, this.blockWriter);
           this.asAssignableRef = oldAsAssignableRef;
-          const value = this.writeCoersionFromExpr(valueExpr, this.errorType, this.blockWriter);
 
           const ret = this.blockWriter.writeAssignmentStatement();
           ret.ref.writeVariableReference(ref);
           ret.value.writeVariableReference(value);
-          return { expressionResult: refVar };
+          return { expressionResult: valueRef };
         },
       };
     } else if (ts.isReturnStatement(node)) {
@@ -663,32 +1230,50 @@ class BopProcessor {
         produceResult: () => {
           const fromBopVar = this.readResult(fromBop);
           const fromVar = fromBopVar.result!;
-
           const propertyRef = createBopReference(node.name.text, fromBopVar.bopType.innerBlock);
           this.resolve(propertyRef);
 
-          const propVar = propertyRef.resolvedRef?.result;
-          if (!this.verifyNotNulllike(propertyRef.resolvedRef, `Property ${propertyRef.identifier} is undefined.`) ||
-              !this.verifyNotNulllike(propVar, `Property ${propertyRef.identifier} is undefined.`)) {
+          if (!this.verifyNotNulllike(propertyRef.resolvedRef, `Property ${propertyRef.identifier} is undefined.`)) {
             return;
           }
           const outBopType = propertyRef.resolvedRef.bopType;
-          let outType = propVar.typeSpec;
+          const isProperty = !!propertyRef.resolvedRef.propertyResult;
+          let outType = propertyRef.resolvedRef.type;
           let isDirectAccess = false;
           if (asAssignableRef) {
             outType = outType.toReference();
-            if (outType.asPrimitive === CodePrimitiveType.Function) {
+            if (isProperty || outType.asPrimitive === CodePrimitiveType.Function) {
               isDirectAccess = true;
             }
           }
+
           let outBopVar;
           if (isDirectAccess) {
             outBopVar = propertyRef.resolvedRef;
           } else {
-            const [outVar, outTmpBopVar] = allocTmpOut(outType, outBopType);
-            outBopVar = outTmpBopVar;
-            const ret = this.blockWriter.writeVariableDeclaration(outVar);
-            ret.initializer.writeExpression().writePropertyAccess(propVar.identifierToken).source.writeVariableReference(fromVar);
+            const propAccessor = propertyRef.resolvedRef.propertyResult;
+            const propVar = propertyRef.resolvedRef.result;
+            if (propAccessor) {
+              // This is calling a getter property.
+              const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.getter, thisVar: fromBopVar }), []);
+              if (!callBop) {
+                return;
+              }
+              this.doProduceResult(callBop);
+              const result = this.readResult(callBop);
+              return {
+                expressionResult: result,
+                thisResult: fromBopVar,
+              };
+            } else if (propVar) {
+              const [outVar, outTmpBopVar] = allocTmpOut(outType, outBopType);
+              outBopVar = outTmpBopVar;
+              const ret = this.blockWriter.writeVariableDeclaration(outVar);
+              ret.initializer.writeExpression().writePropertyAccess(propVar.identifierToken).source.writeVariableReference(fromVar);
+            } else {
+              this.logAssert(`Property ${propertyRef.identifier} is undefined.`);
+              return;
+            }
           }
           return {
             expressionResult: outBopVar,
@@ -734,17 +1319,13 @@ class BopProcessor {
       };
     } else if (ts.isCallExpression(node)) {
       // TODO: Resolve function expressions.
-      // if (!ts.isIdentifier(node.expression)) {
-      //   this.logAssert(`Function expressions are not supported.`);
-      //   return;
-      // }
-      // const functionRef = createBopReference(node.expression.text);
       const oldAsAssignableRef = this.asAssignableRef;
       this.asAssignableRef = true;
       const functionBop = this.visitChild(node.expression);
       this.asAssignableRef = oldAsAssignableRef;
 
-      const functionSignature = this.tc.getResolvedSignature(node);
+      const candidatesOutArray: ts.Signature[] = [];
+      const functionSignature = this.tc.getResolvedSignature(node, candidatesOutArray, node.arguments.length);
       if (!this.verifyNotNulllike(functionSignature, `Function has unresolved signature.`)) {
         return;
       }
@@ -1106,8 +1687,13 @@ class BopProcessor {
     }
   }
 
-  private makeCallBop(node: ts.Node, funcGetter: () => { functionVar: BopVariable, thisVar: BopVariable|undefined }|undefined, args: ArrayLike<ts.Expression>): BopStage|undefined {
-    const argBops = Array.from(args).map(e => this.visitChild(e));
+  private makeCallBop(node: ts.Node, funcGetter: () => { functionVar: BopVariable, thisVar: BopVariable|undefined }|undefined, args: ArrayLike<ts.Expression|CodeVariable>): BopStage|undefined {
+    const argBops: Array<BopStage|CodeVariable> = Array.from(args).map(e => {
+      if (e instanceof CodeVariable) {
+        return e;
+      }
+      return this.visitChild(e);
+    });
 
     return {
       produceResult: () => {
@@ -1128,7 +1714,11 @@ class BopProcessor {
         for (let i = 0; i < argCount; ++i) {
           const argBop = argBops[i];
           const arg = functionOf.args[i];
-          argVars.push(this.writeCoersionFromExpr(argBop, arg.type, this.blockWriter));
+          if (argBop instanceof CodeVariable) {
+            argVars.push(argBop);
+          } else {
+            argVars.push(this.writeCoersionFromExpr(argBop, arg.type, this.blockWriter));
+          }
         }
         const outBopVar = this.block.mapStorageIdentifier('tmp', functionOf.returnType, /* anonymous */ true);
         const outVar = this.blockWriter.scope.createVariableInScope(outBopVar.type, this.getNodeLabel(node));
@@ -1277,6 +1867,8 @@ class BopProcessor {
     fieldIdentifierMap: Map<string, { fieldVar: CodeVariable, fieldType: BopType }>,
     defaultConstructor?: { fieldVar: CodeVariable, fieldType: BopType },
   }>();
+  private internalTypes = new Map<string, BopType>();
+  private internalGenericTypeMap = new Map<string, (typeParameters: BopFields) => BopType>();
   private resolvingSet = new Map<ts.Type, void>();
 
   private resolveType(type: ts.Type, inBlock?: BopBlock): BopType {
@@ -1318,7 +1910,7 @@ class BopProcessor {
     const shortName = this.stringifyType(type);
 
     // Create a new type.
-    if (!this.check(type !== this.tc.getAnyType(), `Type ${shortName} is disallowed.`)) {
+    if (!this.check((type.flags & ts.TypeFlags.Any) !== ts.TypeFlags.Any, `Type ${utils.stringEmptyToNull(shortName) ?? 'any'} is disallowed.`)) {
       return this.errorType;
     }
     if (!this.check(!this.resolvingSet.has(type), `Type ${shortName} is recursive.`)) {
@@ -1343,8 +1935,9 @@ class BopProcessor {
     }
 
     this.resolvingSet.set(type);
-    const typeParams: BopFields = [];
+    const typeArgs: BopFields = [];
     try {
+      // Lookup cached generic instantiations.
       let typeParamsKey = '';
       if (requiresGenericLookup) {
         const baseTypeArgs = (genericBase as ts.InterfaceType).typeParameters ?? [];
@@ -1356,12 +1949,12 @@ class BopProcessor {
           const baseType = baseTypeArgs[i];
           const thisType = thisTypeArgs[i];
           const resolved = resolveInnerTypeRef(thisType) ?? this.errorType;
-          typeParams.push({
+          typeArgs.push({
             identifier: baseType.symbol.name,
             type: resolved,
           });
         }
-        typeParamsKey = this.toStructureKey(typeParams);
+        typeParamsKey = this.toStructureKey(typeArgs);
 
         const genericInstances = this.typeGenericMap.get(genericBase!);
         if (genericInstances) {
@@ -1372,6 +1965,25 @@ class BopProcessor {
         if (found) {
           return found;
         }
+      }
+
+      // Lookup internal types.
+      const sourceFile = tsGetSourceFileOfNode(type.symbol?.declarations?.at(0));
+      const isInternalDeclaration = sourceFile?.fileName?.toLowerCase()?.endsWith('.d.ts') ?? false;
+      if (isInternalDeclaration) {
+        // console.log(`     internal type mapping ========> ${type.symbol.name}`);
+        const internalGenericType = this.internalGenericTypeMap.get(type.symbol.name);
+        if (internalGenericType) {
+          const instantiatedType = internalGenericType(typeArgs);
+          let genericInstances = this.typeGenericMap.get(genericBase!);
+          if (!genericInstances) {
+            genericInstances = new Map();
+            this.typeGenericMap.set(genericBase!, genericInstances);
+          }
+          genericInstances.set(typeParamsKey, instantiatedType);
+          return instantiatedType;
+        }
+        return this.internalTypes.get(type.symbol.name) ?? this.errorType;
       }
 
       // Coalesce backing storage structs.
@@ -1405,7 +2017,7 @@ class BopProcessor {
         fields.push({ type: propertyType, identifier: propertyName });
       }
       // Sometimes the constructor disappears from everything but the symbol.
-      for (const property of type.symbol.members ?? []) {
+      for (const property of type.symbol?.members ?? []) {
         const propertyName = property[0].toString();
         const propertySymbol = property[1];
         const propertyDecl = propertySymbol.declarations?.at(0);
@@ -1436,7 +2048,7 @@ class BopProcessor {
         }
 
         caseVariableIdentifier = 'case';
-        fields.push({ type: this.resolveType(this.tc.getNumberType()), identifier: caseVariableIdentifier });
+        fields.push({ type: this.intType, identifier: caseVariableIdentifier });
       }
 
       const structureKey = this.toStructureKey(fields);
@@ -1467,7 +2079,7 @@ class BopProcessor {
 
         for (const methodDecl of methodDecls) {
           methodFuncs.push(() => {
-            const methodVar = this.declareFunction(methodDecl, newType, this.globalBlock, thisBlock, typeParams);
+            const methodVar = this.declareFunction(methodDecl, newType, this.globalBlock, thisBlock, typeArgs);
             if (!methodVar) {
               return;
             }
@@ -1514,101 +2126,40 @@ class BopProcessor {
 
 
 
-      this.declareFunction(constructorDecl!, newType, this.globalBlock, thisBlock, typeParams);
-      // if (!constructorDecl && existingTypeInfo.defaultConstructor) {
-      //   const constructorIdentifier = existingTypeInfo.defaultConstructor;
-      //   innerBlock.mapIdentifier('constructor', constructorIdentifier.fieldVar.typeSpec, constructorIdentifier.fieldType).result = constructorIdentifier.fieldVar;
-      // } else {
-      //   const writerFuncs: Array<() => void> = [];
+      if (!constructorDecl && existingTypeInfo.defaultConstructor) {
+        // Use the existing default constructor.
+        const constructorIdentifier = existingTypeInfo.defaultConstructor;
+        innerBlock.mapIdentifier('constructor', constructorIdentifier.fieldVar.typeSpec, constructorIdentifier.fieldType).result = constructorIdentifier.fieldVar;
+      } else {
+        if (!constructorDecl) {
+          // Generate a default constructor.
+          const constructorIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Constructor, shortName);
+          const constructorFuncType = BopType.createFunctionType({
+            debugName: `${shortName}.constructor`,
+            innerScope: innerScope.createChildScope(CodeScopeType.Local),
+            innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
+            functionOf: new BopFunctionType(
+              [],
+              newType,
+              /* isMethod */ false,
+            ),
+          });
+          existingTypeInfo.defaultConstructor = { fieldVar: constructorIdentifier, fieldType: constructorFuncType };
 
-      //   const constructorIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Constructor, shortName);
+          innerBlock.mapIdentifier('constructor', constructorIdentifier.typeSpec, constructorFuncType).result = constructorIdentifier;
+          const constructorWriter = this.writer.global.writeFunction(constructorIdentifier.identifierToken);
+          constructorWriter.returnTypeSpec = newType.storageType;
 
-      //   let constructorFuncType: BopType;
-      //   if (!constructorDecl) {
-      //     // TODO: Map type parameters.
-      //     constructorFuncType = BopType.createFunctionType({
-      //       debugName: `${shortName}.constructor`,
-      //       innerScope: innerScope.createChildScope(CodeScopeType.Local),
-      //       innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
-      //       functionOf: new BopFunctionType(
-      //         [],
-      //         newType,
-      //         /* isMethod */ false,
-      //       ),
-      //     });
-      //     existingTypeInfo.defaultConstructor = { fieldVar: constructorIdentifier, fieldType: constructorFuncType };
-
-      //     writerFuncs.push(() => {
-      //       constructorWriter.body.writeReturnStatement().expr.writeVariableReference(constructorOutVar);
-      //     });
-      //   } else {
-      //     const functionArgs: BopFields = [];
-      //     for (const param of constructorDecl.parameters) {
-      //       const isField = param.modifiers?.some(m =>
-      //           m.kind === ts.SyntaxKind.PrivateKeyword ||
-      //           m.kind === ts.SyntaxKind.ProtectedKeyword ||
-      //           m.kind === ts.SyntaxKind.PublicKeyword ||
-      //           m.kind === ts.SyntaxKind.ReadonlyKeyword ||
-      //           false
-      //       );
-
-      //       const paramName = param.name.getText();
-      //       const paramType = resolveInnerTypeRef(this.tc.getTypeAtLocation(param)) ?? this.errorType;
-      //       functionArgs.push({ identifier: paramName, type: paramType });
-
-      //       writerFuncs.push(() => {
-      //         const paramBopVar = constructorBlock.mapIdentifier(paramName, paramType.tempType, paramType);
-      //         const paramVar = constructorWriter.body.scope.createVariableInScope(paramBopVar.type, paramName);
-      //         paramBopVar.result = paramVar;
-      //         constructorWriter.addParam(paramType.tempType, paramVar.identifierToken);
-      //         if (isField) {
-      //           const fieldRef = fieldMap.get(paramName);
-      //           if (!this.verifyNotNulllike(fieldRef, `Field ${paramName} not found.`)) {
-      //             return;
-      //           }
-
-      //           const assign = constructorWriter.body.writeAssignmentStatement();
-      //           assign.ref.writePropertyAccess(fieldRef.result!.identifierToken).source.writeVariableReference(constructorOutVar);
-      //           assign.value.writeVariableReference(paramVar);
-      //         }
-      //       });
-      //     }
-
-      //     constructorFuncType = BopType.createFunctionType({
-      //       debugName: `${shortName}.constructor`,
-      //       innerScope: innerScope.createChildScope(CodeScopeType.Local),
-      //       innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
-      //       functionOf: new BopFunctionType(
-      //         functionArgs,
-      //         newType,
-      //         /* isMethod */ false,
-      //       ),
-      //     });
-
-      //     writerFuncs.push(() => {
-      //       const bodyBop = this.visitInBlock(constructorDecl!.body!, CodeScopeType.Function, constructorBlock);
-      //       bodyBop.thisRef = bodyBop.mapTempIdentifier('this', newType);
-      //       bodyBop.thisRef.result = constructorOutVar;
-      //       this.globalBlock.children.push({
-      //         produceResult: () => {
-      //           this.writeBlock(bodyBop, constructorWriter.body);
-      //           constructorWriter.body.writeReturnStatement().expr.writeVariableReference(constructorOutVar);
-      //           return {};
-      //         },
-      //       });
-      //     });
-      //   }
-
-      //   innerBlock.mapIdentifier('constructor', constructorIdentifier.typeSpec, constructorFuncType).result = constructorIdentifier;
-      //   const constructorWriter = this.writer.global.writeFunction(constructorIdentifier.identifierToken);
-      //   constructorWriter.returnTypeSpec = newType.storageType;
-
-      //   const constructorBlock = this.globalBlock.createChildBlock(CodeScopeType.Function);
-      //   const constructorScope = this.writer.global.scope.createChildScope(CodeScopeType.Function);
-      //   const constructorOutVar = constructorScope.allocateVariableIdentifier(newType.storageType, BopIdentifierPrefix.Local, 'New');
-      //   constructorWriter.body.writeVariableDeclaration(constructorOutVar);
-      //   writerFuncs.forEach(f => f());
-      // }
+          const constructorBlock = this.globalBlock.createChildBlock(CodeScopeType.Function);
+          const constructorScope = this.writer.global.scope.createChildScope(CodeScopeType.Function);
+          const constructorOutVar = constructorScope.allocateVariableIdentifier(newType.storageType, BopIdentifierPrefix.Local, 'New');
+          constructorWriter.body.writeVariableDeclaration(constructorOutVar);
+          constructorWriter.body.writeReturnStatement().expr.writeVariableReference(constructorOutVar);
+        } else {
+          // Roll out the constructor implementation.
+          this.declareFunction(constructorDecl, newType, this.globalBlock, thisBlock, typeArgs);
+        }
+      }
       methodFuncs.forEach(f => f());
 
       return newType;
@@ -1730,6 +2281,19 @@ class BopProcessor {
 
 
 
+// function test(a: int): void;
+// function test(a: float): void;
+// function test(a: float, b: int): void;
+// function test(a: int, b: float): void;
+// function test(a: int|float, b?: int|float): void {
+// }
+
+
+// function doSomething() {
+//   test(1 as float, 2 as int);
+// }
+
+
 
 
 
@@ -1822,8 +2386,240 @@ export function compile(code: string) {
 
 
 const libCode = `
-interface ReadonlyArray<T> {}
-interface Array<T> extends ReadonlyArray<T> {}
+
+interface boolean2 {}
+interface boolean3 {}
+interface boolean4 {}
+interface int { isInt: true }
+interface int2 {}
+interface int3 {}
+interface int4 {}
+interface float { isFloat: true }
+interface float2 {}
+interface float3 {}
+interface float4 {}
+
+interface Vector2Constructor<TVector, TElement> {
+  new (): TVector;
+  new (value: TElement): TVector;
+  new (x: TElement, y: TElement): TVector;
+  new (xy: Swizzlable2<TElement>): TVector;
+  readonly zero: TVector;
+  readonly one: TVector;
+}
+declare var boolean2: Vector2Constructor<boolean2, boolean>;
+declare var int2: Vector2Constructor<int2, int>;
+declare var float2: Vector2Constructor<float2, float>;
+
+interface Vector3Constructor<TVector, TElement> {
+  new (): TVector;
+  new (value: TElement): TVector;
+  new (x: TElement, yz: Swizzlable2<TElement>): TVector;
+  new (xy: Swizzlable2<TElement>, z: TElement): TVector;
+  new (xyz: Swizzlable3<TElement>): TVector;
+  readonly zero: TVector;
+  readonly one: TVector;
+}
+declare var boolean3: Vector3Constructor<boolean3, boolean>;
+declare var int3: Vector3Constructor<int3, int>;
+declare var float3: Vector3Constructor<float3, float>;
+
+interface Vector4Constructor<TVector, TElement> {
+  new (): TVector;
+  new (value: TElement): TVector;
+  new (x: TElement, y: TElement, zw: Swizzlable2<TElement>): TVector;
+  new (x: TElement, yz: Swizzlable2<TElement>, w: TElement): TVector;
+  new (xy: Swizzlable2<TElement>, z: TElement, w: TElement): TVector;
+  new (xy: Swizzlable2<TElement>, zw: Swizzlable2<TElement>): TVector;
+  new (x: TElement, yzw: Swizzlable3<TElement>): TVector;
+  new (xyz: Swizzlable3<TElement>, w: TElement): TVector;
+  new (xyzw: Swizzlable4<TElement>): TVector;
+
+  readonly zero: TVector;
+  readonly one: TVector;
+}
+declare var boolean4: Vector4Constructor<boolean4, boolean>;
+declare var int4: Vector4Constructor<int4, int>;
+declare var float4: Vector4Constructor<float4, float>;
+
+
+
+
+
+interface Swizzlable2<T> {
+  x: T;
+  y: T;
+  xy: Swizzlable2<T>;
+  yx: Swizzlable2<T>;
+}
+interface boolean2 extends Swizzlable2<boolean> {}
+interface int2 extends Swizzlable2<int> {}
+interface float2 extends Swizzlable2<float> {}
+
+interface Swizzlable3<T> {
+  x: T;
+  y: T;
+  z: T;
+  xy: Swizzlable2<T>;
+  xz: Swizzlable2<T>;
+  yx: Swizzlable2<T>;
+  yz: Swizzlable2<T>;
+  zx: Swizzlable2<T>;
+  zy: Swizzlable2<T>;
+  xyz: Swizzlable3<T>;
+  xzy: Swizzlable3<T>;
+  yxz: Swizzlable3<T>;
+  yzx: Swizzlable3<T>;
+  zxy: Swizzlable3<T>;
+  zyx: Swizzlable3<T>;
+}
+interface boolean3 extends Swizzlable3<boolean> {}
+interface int3 extends Swizzlable3<int> {}
+interface float3 extends Swizzlable3<float> {}
+
+interface Swizzlable4<T> {
+  x: T;
+  y: T;
+  z: T;
+  w: T;
+  xy: Swizzlable2<T>;
+  xz: Swizzlable2<T>;
+  xw: Swizzlable2<T>;
+  yx: Swizzlable2<T>;
+  yz: Swizzlable2<T>;
+  yw: Swizzlable2<T>;
+  zx: Swizzlable2<T>;
+  zy: Swizzlable2<T>;
+  zw: Swizzlable2<T>;
+  wx: Swizzlable2<T>;
+  wy: Swizzlable2<T>;
+  wz: Swizzlable2<T>;
+  xyz: Swizzlable3<T>;
+  xyw: Swizzlable3<T>;
+  xzy: Swizzlable3<T>;
+  xzw: Swizzlable3<T>;
+  xwy: Swizzlable3<T>;
+  xwz: Swizzlable3<T>;
+  yxz: Swizzlable3<T>;
+  yxw: Swizzlable3<T>;
+  yzx: Swizzlable3<T>;
+  yzw: Swizzlable3<T>;
+  ywx: Swizzlable3<T>;
+  ywz: Swizzlable3<T>;
+  zxy: Swizzlable3<T>;
+  zxw: Swizzlable3<T>;
+  zyx: Swizzlable3<T>;
+  zyw: Swizzlable3<T>;
+  zwx: Swizzlable3<T>;
+  zwy: Swizzlable3<T>;
+  wxy: Swizzlable3<T>;
+  wxz: Swizzlable3<T>;
+  wyx: Swizzlable3<T>;
+  wyz: Swizzlable3<T>;
+  wzx: Swizzlable3<T>;
+  wzy: Swizzlable3<T>;
+  xyzw: Swizzlable4<T>;
+  xywz: Swizzlable4<T>;
+  xzyw: Swizzlable4<T>;
+  xzwy: Swizzlable4<T>;
+  xwyz: Swizzlable4<T>;
+  xwzy: Swizzlable4<T>;
+  yxzw: Swizzlable4<T>;
+  yxwz: Swizzlable4<T>;
+  yzxw: Swizzlable4<T>;
+  yzwx: Swizzlable4<T>;
+  ywxz: Swizzlable4<T>;
+  ywzx: Swizzlable4<T>;
+  zxyw: Swizzlable4<T>;
+  zxwy: Swizzlable4<T>;
+  zyxw: Swizzlable4<T>;
+  zywx: Swizzlable4<T>;
+  zwxy: Swizzlable4<T>;
+  zwyx: Swizzlable4<T>;
+  wxyz: Swizzlable4<T>;
+  wxzy: Swizzlable4<T>;
+  wyxz: Swizzlable4<T>;
+  wyzx: Swizzlable4<T>;
+  wzxy: Swizzlable4<T>;
+  wzyx: Swizzlable4<T>;
+}
+interface boolean4 extends Swizzlable4<boolean> {}
+interface int4 extends Swizzlable4<int> {}
+interface float4 extends Swizzlable4<float> {}
+
+
+
+interface AtomicCounter {
+  relaxedGet(): int;
+  relaxedGetAndIncrement(): int;
+  relaxedGetAndIncrement(delta: int): int;
+}
+interface AtomicCounterConstructor {
+  new (): AtomicCounter;
+  new (initialValue: int): AtomicCounter;
+}
+declare var AtomicCounter: AtomicCounterConstructor;
+
+
+interface Texture {
+  width: int;
+  height: int;
+  size: int2;
+  channels: int;
+
+  fill(color: float4);
+  syncToGpu();
+
+  sample<TCoordMode extends CoordMode, TFilterMode extends FilterMode, TAddressMode extends AddressMode>(
+      uv: float2): float4;
+}
+interface TextureConstructor {
+  new (width: int, height: int, channels: int = 4): Texture;
+  new (size: int2, channels: int = 4): Texture;
+}
+declare var Texture: TextureConstructor;
+
+
+interface CoordMode { coordMode: 0|1; }
+interface NormalizedCoordMode extends CoordMode { coordMode: 0; }
+interface PixelCoordMode extends CoordMode { coordMode: 1; }
+
+interface FilterMode { filterMode: 0|1|2; }
+interface NearestFilterMode { filterMode: 0; }
+interface LinearFilterMode { filterMode: 1; }
+interface BicubicFilterMode { filterMode: 2; }
+
+interface AddressMode { addressMode: 0|1|2|3|4; }
+interface ClampToZeroAddressMode { addressMode: 0; }
+interface ClampToEdgeAddressMode { addressMode: 1; }
+interface RepeatAddressMode { addressMode: 2; }
+interface MirroredRepeatAddressMode { addressMode: 3; }
+interface ClampToBorderAddressMode { addressMode: 4; }
+
+
+
+interface Array<T> {
+  [n: int]: T;
+  length: int;
+
+  readonly isGpuBufferDirty: boolean;
+  readonly isCpuBufferDirty: boolean;
+
+  syncToGpu();
+  syncToCpu();
+}
+interface ArrayConstructor {
+  new <T>(): Array<T>;
+  new <T>(length: int): Array<T>;
+  new <T>(length: int, fill: T): Array<T>;
+}
+declare var Array: ArrayConstructor;
+
+
+interface RelativeIndexable<T> {
+  at(index: int): T | undefined;
+}
+interface Array<T> extends RelativeIndexable<T> {}
 `;
 
 
@@ -1991,6 +2787,12 @@ function tsGetMappedType(type: ts.Type, mapper: tsTypeMapper, tc: ts.TypeChecker
   }
 }
 
+function tsGetSourceFileOfNode(node: ts.Node | undefined): ts.SourceFile | undefined {
+  while (node && node.kind !== ts.SyntaxKind.SourceFile) {
+    node = node.parent;
+  }
+  return node as ts.SourceFile;
+}
 
 
 

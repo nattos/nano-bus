@@ -306,28 +306,64 @@ function doTest() {
 // }
 // `;
 
-  const code = `
-class A<T> {
-  value: T;
+//   const code = `
+// class A<T> {
+//   value: T;
 
-  method() {
-    const inner: T = this.value;
-    return this.value;
-  }
+//   method() {
+//     const inner: T = this.value;
+//     return this.value;
+//   }
 
-  constructor(v: T, public a: number) {
-    this.value = v;
-    a + a;
-  }
-}
+//   constructor(v: T, public a: number) {
+//     this.value = v;
+//     a + a;
+//   }
+// }
+
+// function someFunc() {
+//   const a = new A<number>(1234, 1234);
+//   a.value = 222;
+//   a.method();
+// }
+
+// `;
+
+const code = `
 
 function someFunc() {
-  const a = new A<number>(1234, 1234);
-  a.value = 222;
-  a.method();
+  const array: Array<boolean> = new Array<boolean>(12);
+  array.at(123);
+  const l = array.length;
+  const a: float3 = new float4(3, new float3(3));
+  const b = a.zyx;
+  a.xyz = new float3(123);
+  // const boolVec: boolean4 = boolean4.zero;
+  // const t: Texture = new Texture(60, 70);
+  // // const a: int2 = new int2();
+  // // const b: float2 = new float2();
+  // const c = t.sample<NormalizedCoordMode, LinearFilterMode, ClampToEdgeAddressMode>(new float2(1, 2));
 }
 
 `;
+
+
+
+// const code = `
+
+// function otherFunc(a: int): int {
+//   return a;
+// }
+
+// function someFunc() {
+//   otherFunc(1234 + 2);
+// }
+
+// `;
+
+
+
+
 
 //   const code = `
 // class A {
@@ -354,10 +390,11 @@ function someFunc() {
 
   bop.compile(code);
 
-
-
-
-
+  // const a: float3 = new float4(3, new float3(3));
+  // a.xyz = 123;
+  // const boolVec: boolean4 = boolean4.zero;
+  // const t: Texture = new Texture(60, 70);
+  // const c = t.sample<NormalizedCoordMode, LinearFilterMode, ClampToEdgeAddressMode>(new float2(1, 2));
 
 
 //   const code = `

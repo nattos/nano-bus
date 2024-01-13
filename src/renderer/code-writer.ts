@@ -20,6 +20,7 @@ export class CodeTypeSpec {
   private constructor(
     public asStruct?: CodeNamedToken,
     public asPrimitive?: CodePrimitiveType,
+    public typeArgs: CodeTypeSpec[] = [],
     public isReference: boolean = false,
     public isPointer: boolean = false,
     public isConst: boolean = false,
@@ -30,6 +31,7 @@ export class CodeTypeSpec {
     return new CodeTypeSpec(
       this.asStruct,
       this.asPrimitive,
+      this.typeArgs,
       this.isReference,
       this.isPointer,
       this.isConst,
@@ -40,6 +42,7 @@ export class CodeTypeSpec {
   toReference(value: boolean = true) { const copy = this.toCopy(); copy.isReference = value; return copy; }
   toConst(value: boolean = true) { const copy = this.toCopy(); copy.isConst = value; return copy; }
   toArray(value: boolean = true) { const copy = this.toCopy(); copy.isArray = value; return copy; }
+  withTypeArgs(typeArgs: CodeTypeSpec[]) { const copy = this.toCopy(); copy.typeArgs = typeArgs; return copy; }
 
   static fromStruct(structIdentifier: CodeNamedToken) {
     return new CodeTypeSpec(structIdentifier, undefined);
@@ -200,9 +203,16 @@ interface CodeWriterFragment {
   get writerFunc(): CodeWriterFunc;
 }
 
+export interface CodeFunctionWriter {
+  body: CodeStatementWriter;
+  returnTypeSpec: CodeTypeSpec;
+  addParam(typeSpec: CodeTypeSpec, identifier: CodeNamedToken): void;
+}
+
 export class CodeGlobalWriter implements CodeWriterFragment {
   public readonly scope: CodeScope = CodeScope.createGlobalScope();
 
+  private typedefWriters: CodeWriterFunc[] = [];
   private typeWriters: CodeWriterFunc[] = [];
   private typeIdentifiers: CodeNamedToken[] = [];
   private functionWriters: CodeWriterFunc[] = [];
@@ -210,16 +220,13 @@ export class CodeGlobalWriter implements CodeWriterFragment {
 
   get writerFunc(): CodeWriterFunc {
     return stream => {
+      this.typedefWriters.forEach(makeInvokeCodeWriterFuncHelper(stream));
       this.typeWriters.forEach(makeInvokeCodeWriterFuncHelper(stream));
       this.functionWriters.forEach(makeInvokeCodeWriterFuncHelper(stream));
     };
   }
 
-  writeFunction(identifier: CodeNamedToken): {
-    body: CodeStatementWriter,
-    returnTypeSpec: CodeTypeSpec,
-    addParam(typeSpec: CodeTypeSpec, identifier: CodeNamedToken): void,
-  } {
+  writeFunction(identifier: CodeNamedToken): CodeFunctionWriter {
     const functionScope = this.scope.createChildScope(CodeScopeType.Function);
     const params: Array<{ typeSpec: CodeTypeSpec, identifier: CodeNamedToken }> = [];
     const result = {
@@ -283,6 +290,19 @@ export class CodeGlobalWriter implements CodeWriterFragment {
       stream.flushLine();
     });
     return result;
+  }
+
+  writeTypedef(identifier: CodeNamedToken, type: CodeTypeSpec): void {
+    this.typeIdentifiers.push(identifier);
+    this.typedefWriters.push(stream => {
+      stream.writeToken('typedef');
+      stream.writeWhitespace();
+      stream.writeTypeSpec(type);
+      stream.writeWhitespace();
+      stream.writeToken(identifier);
+      stream.writeToken(';');
+      stream.flushLine();
+    });
   }
 }
 
@@ -566,17 +586,35 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
   }
   writeStaticFunctionCall(funcIdentifier: CodeNamedToken): {
     addArg(): CodeExpressionWriter,
+    addTemplateArg(value: CodeTypeSpec): void,
   } {
     const params: CodeExpressionWriter[] = [];
+    const typeArgs: CodeTypeSpec[] = [];
     const result = {
       addArg() {
         const paramExpr = new CodeExpressionWriter();
         params.push(paramExpr);
         return paramExpr;
       },
+      addTemplateArg(value: CodeTypeSpec) {
+        typeArgs.push(value);
+      },
     };
     this.setWriter(stream => {
       stream.writeToken(funcIdentifier);
+      if (typeArgs.length > 0) {
+        stream.writeToken('<');
+        for (let i = 0; i < typeArgs.length; ++i) {
+          const typeArg = typeArgs[i];
+          const isLast = i === typeArgs.length - 1;
+          stream.writeTypeSpec(typeArg);
+          if (!isLast) {
+            stream.writeToken(',');
+            stream.writeWhitespacePadding();
+          }
+        }
+        stream.writeToken('>');
+      }
       stream.writeToken('(');
       for (let i = 0; i < params.length; ++i) {
         const param = params[i];
@@ -683,6 +721,19 @@ export class CodeTextStream {
       this.writeToken(typeSpec.asStruct);
     } else {
       throw new Error(`Type ${typeSpec} is undefined.`);
+    }
+    if (typeSpec.typeArgs.length > 0) {
+      this.writeToken('<');
+      for (let i = 0; i < typeSpec.typeArgs.length; ++i) {
+        const typeArg = typeSpec.typeArgs[i];
+        const isLast = i === typeSpec.typeArgs.length - 1;
+        this.writeTypeSpec(typeArg);
+        if (!isLast) {
+          this.writeToken(',');
+          this.writeWhitespacePadding();
+        }
+      }
+      this.writeToken('>');
     }
     if (typeSpec.isReference) {
       this.writeToken('&');

@@ -349,6 +349,13 @@ export function formatIntPadded(value: number, minDigits: number): string {
   return str;
 }
 
+export function stringEmptyToNull(value: string|null|undefined): string|undefined {
+  if (!value) {
+    return undefined;
+  }
+  return value;
+}
+
 export function filePathDirectory(path: string): string {
   const splitIndex = path.lastIndexOf('/');
   if (splitIndex < 0) {
