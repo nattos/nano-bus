@@ -15,10 +15,10 @@ interface float3 {}
 interface float4 {}
 
 interface Vector2Constructor<TVector, TElement> {
-  new (): TVector;
-  new (value: TElement): TVector;
+  // new (): TVector;
+  // new (value: TElement): TVector;
   new (x: TElement, y: TElement): TVector;
-  new (xy: Swizzlable2<TElement>): TVector;
+  // new (xy: Swizzlable2<TElement>): TVector;
   readonly zero: TVector;
   readonly one: TVector;
 }
@@ -27,11 +27,12 @@ declare var int2: Vector2Constructor<int2, int>;
 declare var float2: Vector2Constructor<float2, float>;
 
 interface Vector3Constructor<TVector, TElement> {
-  new (): TVector;
-  new (value: TElement): TVector;
-  new (x: TElement, yz: Swizzlable2<TElement>): TVector;
-  new (xy: Swizzlable2<TElement>, z: TElement): TVector;
-  new (xyz: Swizzlable3<TElement>): TVector;
+  // new (): TVector;
+  // new (value: TElement): TVector;
+  new (x: TElement, y: TElement, z: TElement): TVector;
+  // new (x: TElement, yz: Swizzlable2<TElement>): TVector;
+  // new (xy: Swizzlable2<TElement>, z: TElement): TVector;
+  // new (xyz: Swizzlable3<TElement>): TVector;
   readonly zero: TVector;
   readonly one: TVector;
 }
@@ -40,15 +41,16 @@ declare var int3: Vector3Constructor<int3, int>;
 declare var float3: Vector3Constructor<float3, float>;
 
 interface Vector4Constructor<TVector, TElement> {
-  new (): TVector;
-  new (value: TElement): TVector;
-  new (x: TElement, y: TElement, zw: Swizzlable2<TElement>): TVector;
-  new (x: TElement, yz: Swizzlable2<TElement>, w: TElement): TVector;
-  new (xy: Swizzlable2<TElement>, z: TElement, w: TElement): TVector;
-  new (xy: Swizzlable2<TElement>, zw: Swizzlable2<TElement>): TVector;
-  new (x: TElement, yzw: Swizzlable3<TElement>): TVector;
-  new (xyz: Swizzlable3<TElement>, w: TElement): TVector;
-  new (xyzw: Swizzlable4<TElement>): TVector;
+  // new (): TVector;
+  // new (value: TElement): TVector;
+  new (x: TElement, y: TElement, z: TElement, w: TElement): TVector;
+  // new (x: TElement, y: TElement, zw: Swizzlable2<TElement>): TVector;
+  // new (x: TElement, yz: Swizzlable2<TElement>, w: TElement): TVector;
+  // new (xy: Swizzlable2<TElement>, z: TElement, w: TElement): TVector;
+  // new (xy: Swizzlable2<TElement>, zw: Swizzlable2<TElement>): TVector;
+  // new (x: TElement, yzw: Swizzlable3<TElement>): TVector;
+  // new (xyz: Swizzlable3<TElement>, w: TElement): TVector;
+  // new (xyzw: Swizzlable4<TElement>): TVector;
 
   readonly zero: TVector;
   readonly one: TVector;
@@ -240,4 +242,69 @@ interface RelativeIndexable<T> {
 }
 interface Array<T> extends RelativeIndexable<T> {}
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+type VarArgs = readonly unknown[];
+
+
+
+type ThreadId1d = int;
+interface ThreadId2d {
+  xy: int2;
+}
+interface ThreadId2dNormalized {
+  xy: float2;
+}
+type ThreadId = ThreadId2dNormalized|ThreadId2d|ThreadId1d;
+
+
+type CompiledComputePipeline<TExtraKernelArgs extends VarArgs> = (...tailArgs: TExtraKernelArgs) => void;
+type CompiledMapperComputePipeline<TInput, TOutput, TExtraKernelArgs extends VarArgs> = (inputs: TInput[], ...tailArgs: TExtraKernelArgs) => TOutput[];
+type CompiledTexturePipeline<TExtraKernelArgs extends VarArgs> = (...tailArgs: TExtraKernelArgs) => Texture;
+
+type CompiledFragmentStage<TExtraFragmentShaderArgs extends VarArgs> = (...args: TExtraFragmentShaderArgs) => float4;
+type CompiledRenderPipeline<TVertex, TExtraVertexShaderArgs extends VarArgs, TExtraFragmentShaderArgs extends VarArgs> = (vertices: TVertex[], ...args: TExtraVertexShaderArgs) => CompiledFragmentStage<TExtraFragmentShaderArgs>;
+
+interface Gpu {}
+interface GpuStatic {
+  compute<TExtraKernelArgs extends VarArgs>(
+      kernel: (threadId: ThreadId1d, ...args: [...TExtraKernelArgs]) => void,
+      options: { gridFromSize?: int, gridFromArray?: unknown[] },
+  ): CompiledComputePipeline<TExtraKernelArgs>;
+  compute<TInput, TOutput, TExtraKernelArgs extends VarArgs>(
+      kernel: (input: TInput, threadId: ThreadId1d, ...args: [...TExtraKernelArgs]) => TOutput,
+      options: { gridFromArray: unknown[], writeBuffer?: TOutput[] },
+  ): CompiledMapperComputePipeline<TInput, TOutput, TExtraKernelArgs>;
+
+  computeTexture<TThreadId extends ThreadId, TExtraKernelArgs extends VarArgs>(
+      kernel: (threadId: TThreadId, ...args: [...TExtraKernelArgs]) => float4,
+      options: { gridFromTexture: Texture, writeTarget?: Texture },
+  ): CompiledTexturePipeline<TExtraKernelArgs>;
+
+  renderElements<TVertex, TSurface, TExtraVertexShaderArgs extends VarArgs, TExtraFragmentShaderArgs extends VarArgs>(
+      count: int,
+      vertexShader: (vertex: TVertex, threadId: ThreadId1d, ...args: [...TExtraVertexShaderArgs]) => TSurface,
+      fragmentShader: (surface: TSurface, threadId: ThreadId1d, ...args: [...TExtraFragmentShaderArgs]) => float4,
+      options?: { blendMode?: int, writeTarget?: Texture },
+  ): CompiledRenderPipeline<TVertex, TExtraVertexShaderArgs, TExtraFragmentShaderArgs>;
+}
+declare var Gpu: GpuStatic;
 

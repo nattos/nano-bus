@@ -1,5 +1,5 @@
+const CopyWebpackPlugin = require("copy-webpack-plugin");
 const HtmlWebpackPlugin = require("html-webpack-plugin");
-const FilterWarningsPlugin = require('webpack-filter-warnings-plugin');
 const path = require('path');
 
 module.exports = [
@@ -30,6 +30,11 @@ module.exports = [
         'perf_hooks': false,
       },
     },
+    stats: {
+      warningsFilter: [
+        /Critical dependency/,  // from typescript.js
+      ],
+    },
     externals: {
       'node:fs': 'commonjs2 node:fs'
     },
@@ -42,10 +47,12 @@ module.exports = [
 
     plugins: [
       new HtmlWebpackPlugin({
-          title: '', 
+          title: '',
           template: 'src/renderer/index.html' }),
-      new FilterWarningsPlugin({
-          exclude: [/Critical dependency/]
+      new CopyWebpackPlugin({
+          patterns: [
+              { from: 'src/@types/bop-lib-code.d.ts', to: 'bop-lib-code.d.ts' },
+          ],
       }),
     ],
 
