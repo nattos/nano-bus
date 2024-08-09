@@ -608,6 +608,21 @@ export function putKeyValues<T extends {}>(toUpdate: T, ...entries: Array<[key: 
   return toUpdate;
 }
 
+export function visitRec<T>(roots: T[], getEdges: (node: T) => T[], visit: (node: T) => void) {
+  const visited = new Set<T>();
+  const inner = (node: T) => {
+    if (visited.has(node)) {
+      return;
+    }
+    visited.add(node);
+    visit(node);
+    for (const ref of getEdges(node)) {
+      inner(ref);
+    }
+  };
+  roots.forEach(inner);
+};
+
 export function merge<T1 extends object, T2 extends object>(onto: T1, from: T2): T1 & T2 {
   if (typeof from !== "object" || from instanceof Array) {
       throw new Error("merge: 'from' must be an ordinary object");

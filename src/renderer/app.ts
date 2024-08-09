@@ -329,22 +329,67 @@ function doTest() {
 
 // `;
 
+// const code = `
+
+// function someFunc() {
+//   const array: Array<boolean> = new Array<boolean>(12);
+//   array.at(123);
+//   const l = array.length;
+//   const a: float3 = new float4(3, new float3(3));
+//   const b = a.zyx;
+//   a.xyz = new float3(123);
+//   // const boolVec: boolean4 = boolean4.zero;
+//   // const t: Texture = new Texture(60, 70);
+//   // // const a: int2 = new int2();
+//   // // const b: float2 = new float2();
+//   // const c = t.sample<NormalizedCoordMode, LinearFilterMode, ClampToEdgeAddressMode>(new float2(1, 2));
+// }
+
+// `;
+
 const code = `
 
-function someFunc() {
-  const array: Array<boolean> = new Array<boolean>(12);
-  array.at(123);
-  const l = array.length;
-  const a: float3 = new float4(3, new float3(3));
-  const b = a.zyx;
-  a.xyz = new float3(123);
-  // const boolVec: boolean4 = boolean4.zero;
-  // const t: Texture = new Texture(60, 70);
-  // // const a: int2 = new int2();
-  // // const b: float2 = new float2();
-  // const c = t.sample<NormalizedCoordMode, LinearFilterMode, ClampToEdgeAddressMode>(new float2(1, 2));
+interface TriangleVertex {
+  /* @position */ position: float2;
+  color: float4;
 }
 
+function gpuTest(value: float) {
+  return value + 1;
+}
+
+@vertexShader
+function vertexShader(position: TriangleVertex, threadId: int, options: { placeholder: float }): TriangleVertex {
+  return position;
+}
+@fragmentShader
+function fragmentShader(position: TriangleVertex, threadId: int, options: { alpha: float }): float4 {
+  const color = position.color;
+  color.a = gpuTest(options.alpha);
+  return color;
+}
+function test() {}
+function drawTriangle() {
+  test();
+  // @vertexShader
+  // function vertexShader(position: TriangleVertex, threadId: int, options: { placeholder: float }): TriangleVertex {
+  //   return position;
+  // }
+  // @fragmentShader
+  // function fragmentShader(position: TriangleVertex, threadId: int, options: { alpha: float }): float4 {
+  //   const color = position.color;
+  //   color.a = options.alpha;
+  //   return color;
+  // }
+
+  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
+  positions.push({ position: new float2(0, 0), color: new float4(0, 0, 1, 1) });
+  positions.push({ position: new float2(1, 0), color: new float4(1, 0, 1, 1) });
+  positions.push({ position: new float2(1, 1), color: new float4(1, 1, 1, 1) });
+  // const positions = generateTriangleVertices(10);
+
+  Gpu.renderElements(positions.length, vertexShader, fragmentShader)(positions, { placeholder: 1 })({ alpha: 0.5 });
+}
 `;
 
 

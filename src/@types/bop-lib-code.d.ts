@@ -217,6 +217,8 @@ interface Array<T> {
   [n: int]: T;
   length: int;
 
+  push(value: T): void;
+
   readonly isGpuBufferDirty: boolean;
   readonly isCpuBufferDirty: boolean;
 
@@ -227,6 +229,8 @@ interface ArrayConstructor {
   new <T>(): Array<T>;
   new <T>(length: int): Array<T>;
   new <T>(length: int, fill: T): Array<T>;
+
+  persistent<T>(length: int): Array<T>;
 }
 declare var Array: ArrayConstructor;
 
