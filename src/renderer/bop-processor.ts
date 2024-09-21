@@ -1,11 +1,17 @@
 import * as utils from '../utils';
 import * as ts from "typescript";
-import { CodeBinaryOperator, CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeStatementWriter, CodeStructWriter, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
-import { BopType, BopFunctionConcreteImplDetail, BopInternalTypeBuilder, BopFields, BopFunctionType, BopTypeUnion } from './bop-type';
+import { CodeAttributeDecl, CodeAttributeKey, CodeBinaryOperator, CodeFunctionWriter, CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeStatementWriter, CodeStructBodyWriter, CodeStructWriter, CodeTypeSpec, CodeVariable, CodeWriter, CodeWriterPlatform } from './code-writer';
+import { BopType, BopFunctionConcreteImplDetail, BopInternalTypeBuilder, BopFields, BopFunctionType, BopTypeUnion, BopStructType } from './bop-type';
 import { getNodeLabel, tsGetMappedType, tsGetSourceFileOfNode, tsGetSyntaxTypeLabel, tsTypeMapper } from './ts-helpers';
-import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction, BopVariable, BopReference, BopGenericFunctionInstance } from './bop-data';
+import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction, BopVariable, BopReference, BopGenericFunctionInstance, BopInferredNumberType } from './bop-data';
 import { loadBopLib, toStringResolvedType } from './bop-lib-loader';
-import { bopShaderBinding } from './bop-shader-binding';
+import { bopShaderBinding, expandShaderBindings } from './bop-shader-binding';
+import { evalJavascriptInContext, SharedMTLInternals } from './bop-javascript-lib';
+import { WGSL_LIB_CODE } from './bop-wgsl-lib';
+
+
+
+
 
 export class BopProcessor {
   readonly tc: ts.TypeChecker;
@@ -18,6 +24,7 @@ export class BopProcessor {
   asAssignableRef = false;
   private unrolledBlocks?: BopStage[];
 
+  readonly instanceVarsIdentifier: CodeVariable;
   readonly instanceBlockWriter: CodeStructWriter;
   readonly instanceScope: CodeScope;
   readonly prepareFuncs: CodeVariable[] = [];
@@ -32,6 +39,8 @@ export class BopProcessor {
   readonly voidType;
   readonly booleanType;
   readonly intType;
+  readonly floatType;
+  readonly float4Type;
   readonly undefinedType;
   readonly undefinedConstant;
   private readonly resultMap = new Map<BopStage, BopResult>();
@@ -53,7 +62,11 @@ export class BopProcessor {
     this.block = this.globalBlock;
 
     this.instanceScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
-    this.instanceBlockWriter = this.writer.global.writeStruct(this.writer.makeInternalToken('InstanceVars')).struct;
+    const instanceVarsTypeIdentifier = this.writer.makeInternalToken('InstanceVars');
+    this.instanceBlockWriter = this.writer.global.writeStruct(instanceVarsTypeIdentifier);
+    this.instanceBlockWriter.touchedByGpu = false;
+    const instanceVarsToken = this.writer.makeInternalToken('instanceVars');
+    this.instanceVarsIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(instanceVarsTypeIdentifier), BopIdentifierPrefix.Local, 'instanceVars', { fixedIdentifierToken: instanceVarsToken });
 
     // Map intrinsic types.
     this.errorType = this.createPrimitiveType(CodeTypeSpec.compileErrorType);
@@ -77,14 +90,16 @@ export class BopProcessor {
     const { libTypes, newBopTypeMap } = loadBopLib(this);
 
     this.intType = newBopTypeMap.get('int')!.bopType!;
-    this.typeMap.set(this.tc.getNumberType(), this.intType);
+    this.floatType = newBopTypeMap.get('float')!.bopType!;
+    this.float4Type = newBopTypeMap.get('float4')!.bopType!;
+    // this.typeMap.set(this.tc.getNumberType(), this.intType); // TODO: FIX!!!
 
     for (const type of libTypes.values()) {
       const typeArgs = type.typeParameters.map(t => utils.upcast({ name: t, typeArgs: [] }));
       const typeName = toStringResolvedType({ name: type.name, typeArgs });
       for (const prop of type.properties) {
         const propType = prop.type(typeArgs);
-        console.log(`${typeName}.${prop.name}: ${toStringResolvedType(propType)}`);
+        // console.log(`${typeName}.${prop.name}: ${toStringResolvedType(propType)}`);
       }
       for (const method of type.methods) {
         const methodTypeArgs = method.typeParameters.map(t => utils.upcast({ name: t, typeArgs: [] }));
@@ -92,7 +107,7 @@ export class BopProcessor {
         if (methodTypeArgs.length > 0) {
           methodName += `<${methodTypeArgs.map(toStringResolvedType).join(', ')}>`;
         }
-        console.log(`${typeName}.${methodName}(${method.parameters.map(p => `${p.name}: ${toStringResolvedType(p.type(typeArgs, methodTypeArgs))}`).join(', ')}): ???`);
+        // console.log(`${typeName}.${methodName}(${method.parameters.map(p => `${p.name}: ${toStringResolvedType(p.type(typeArgs, methodTypeArgs))}`).join(', ')}): ???`);
       }
     }
 
@@ -130,8 +145,38 @@ export class BopProcessor {
         node => Array.from(node.references),
         node => node.touchedByGpu = true);
 
-    console.log(this.writer.getOuterCode(false));
-    console.log(this.writer.getOuterCode(true));
+    const platform = CodeWriterPlatform.WebGPU;
+    const cpuCode = this.writer.getOuterCode(false, platform);
+    console.log(cpuCode);
+    const gpuCode = this.writer.getOuterCode(true, platform);
+    console.log(gpuCode);
+
+    // const evalContext = new BopJavascriptEvalContext();
+    // function evalInContext(this: BopJavascriptEvalContext, code: string) {
+    //   return eval(code);
+    // }
+    SharedMTLInternals().loadShaderCode(gpuCode);
+    evalJavascriptInContext(`
+const instanceVars = {};
+` + cpuCode + `
+F7_DrawTriangle_prepare();
+F5_drawTriangle();
+`);
+
+    // (async () => {
+    //   const adapter = await navigator.gpu.requestAdapter();
+    //   const device = await adapter?.requestDevice();
+    //   if (!adapter || !device) {
+    //     return;
+    //   }
+    //   const shaderModule = device.createShaderModule({
+    //     code: gpuCode + WGSL_LIB_CODE,
+    //   });
+    //   const compilationInfo = await shaderModule.getCompilationInfo();
+    //   if (compilationInfo.messages.length > 0) {
+    //     console.log(compilationInfo.messages.map(m => `${m.lineNum}:${m.linePos} ${m.type}: ${m.message}`).join('\n'));
+    //   }
+    // })();
   }
 
   private mapAndResolveRec(block: BopBlock, children?: Array<BopStage|BopBlock>) {
@@ -474,11 +519,12 @@ export class BopProcessor {
         return;
       }
 
+      const assignType = this.resolveType(this.tc.getTypeAtLocation(node.left));
       const valueExpr = this.visitChild(node.right);
 
       return {
         produceResult: () => {
-          const [value, valueRef] = this.writeCoersionFromExprPair(valueExpr, this.errorType, this.blockWriter);
+          const [value, valueRef] = this.writeCoersionFromExprPair(valueExpr, assignType, this.blockWriter);
 
           const refResult = this.readFullResult(refExpr);
           const propAccessor = refResult?.expressionResult?.propertyResult;
@@ -494,7 +540,7 @@ export class BopProcessor {
 
           const oldAsAssignableRef = this.asAssignableRef;
           this.asAssignableRef = true;
-          const [ref, refVar] = this.writeCoersionFromExprPair(refExpr, this.errorType, this.blockWriter);
+          const [ref, refVar] = this.writeCoersionFromExprPair(refExpr, assignType, this.blockWriter);
           this.asAssignableRef = oldAsAssignableRef;
 
           const ret = this.blockWriter.writeAssignmentStatement();
@@ -507,11 +553,12 @@ export class BopProcessor {
       const valueBop = this.visitChildOrNull(node.expression);
       return {
         produceResult: () => {
-          const ret = this.blockWriter.writeReturnStatement();
           if (valueBop) {
             // Coerce to return type.
             const returnType = this.scopeReturnType;
             const valueVar = this.writeCoersionFromExpr(valueBop, returnType, this.blockWriter);
+
+            const ret = this.blockWriter.writeReturnStatement();
             ret.expr.writeVariableReference(valueVar);
           }
           return {};
@@ -626,7 +673,11 @@ export class BopProcessor {
             const [outVar, outTmpBopVar] = allocTmpOut(outType, outBopType);
             outBopVar = outTmpBopVar;
             const ret = this.blockWriter.writeVariableDeclaration(outVar);
-            ret.initializer.writeExpression().writeVariableReference(inVar!);
+            if (asAssignableRef) {
+              ret.initializer.writeExpression().writeVariableReferenceReference(inVar!);
+            } else {
+              ret.initializer.writeExpression().writeVariableReference(inVar!);
+            }
           }
           return { expressionResult: outBopVar };
         },
@@ -783,15 +834,29 @@ export class BopProcessor {
         return;
       }
 
-      const exprType = this.resolveType(this.tc.getTypeAtLocation(node));
-
       const lhs = this.visitChild(node.left);
       const rhs = this.visitChild(node.right);
-      const lhsType = this.errorType;
-      const rhsType = this.errorType;
 
-      return {
+      let exprType: BopType;
+      let lhsType: BopType;
+      let rhsType: BopType;
+      const thisStage: BopStage = {
+        getAuxTypeInference: () => {
+          // TODO: Support operators with different type patterns.
+          const lhsAuxType = lhs.getAuxTypeInference?.().numberType;
+          const rhsAuxType = rhs.getAuxTypeInference?.().numberType;
+          if (lhsAuxType || rhsAuxType) {
+            const asInt = lhsAuxType === BopInferredNumberType.Int && rhsAuxType === BopInferredNumberType.Int;
+            exprType = asInt ? this.intType : this.floatType;
+          } else {
+            exprType = this.resolveType(this.tc.getTypeAtLocation(node));
+          }
+          lhsType = exprType;
+          rhsType = exprType;
+          return { numberType: exprType === this.intType ? BopInferredNumberType.Int : BopInferredNumberType.Float };
+        },
         produceResult: () => {
+          thisStage.getAuxTypeInference!();
           const lhsVar = this.writeCoersionFromExpr(lhs, lhsType, this.blockWriter);
           const rhsVar = this.writeCoersionFromExpr(rhs, rhsType, this.blockWriter);
           const [outVar, outBopVar] = allocTmpOut(exprType.storageType, exprType);
@@ -802,15 +867,28 @@ export class BopProcessor {
           return { expressionResult: outBopVar };
         },
       };
+      return thisStage;
     } else if (ts.isParenthesizedExpression(node)) {
       return this.delegateToChild(node.expression);
     } else if (ts.isNumericLiteral(node)) {
+      const parsedInt = utils.parseIntOr(node.text);
+      const parsedFloat = utils.parseFloatOr(node.text);
+      // TODO: Bad!!!
+      const asInt = !node.getText(this.sourceRoot).includes('.') && parsedInt === parsedFloat;
       return {
         produceResult: () => {
-          const [outVar, outBopVar] = allocTmpOut(this.intType.storageType, this.intType);
+          const numberType = asInt ? this.intType : this.floatType;
+          const [outVar, outBopVar] = allocTmpOut(numberType.storageType, numberType);
           const ret = this.blockWriter.writeVariableDeclaration(outVar);
-          ret.initializer.writeExpression().writeLiteralInt(parseInt(node.text));
+          if (asInt) {
+            ret.initializer.writeExpression().writeLiteralInt(parsedInt ?? Number.NaN);
+          } else {
+            ret.initializer.writeExpression().writeLiteralFloat(parsedFloat ?? Number.NaN);
+          }
           return { expressionResult: outBopVar };
+        },
+        getAuxTypeInference: () => {
+          return { numberType: asInt ? BopInferredNumberType.Int : BopInferredNumberType.Float };
         },
       };
     } else if (
@@ -863,7 +941,34 @@ export class BopProcessor {
       const errorResult = this.readCompileError();
       return [errorResult.result!, errorResult];
     }
-    return [source.result, source];
+    if (type === source.bopType) {
+      return [source.result, source];
+    }
+
+    const fromType = source.bopType;
+    const toType = type;
+
+    blockWriter ??= this.blockWriter;
+    const outBopVar = this.block.mapTempIdentifier('coersion', toType, /* anonymous */ true);
+    const outVar = blockWriter.scope.createVariableInScope(outBopVar.type, 'coersion');
+    outBopVar.result = outVar;
+    const init = blockWriter.writeVariableDeclaration(outVar);
+    if (fromType.structOf && toType.structOf) {
+      for (const toField of toType.structOf.fields) {
+        const fromField = fromType.innerBlock.identifierMap.get(toField.nameHint);
+        if (this.verifyNotNulllike(fromField, `Unable to implicitly cast ${fromType.debugName} to ${toType.debugName}: field ${toField.nameHint} not found.`)) {
+          init.initializer.writeAssignStructField(toField.result!.identifierToken).value.writePropertyAccess(fromField.result!.identifierToken).source.writeVariableReference(source.result);
+        }
+      }
+    } else {
+    // } else if (fromType.tempType.asPrimitive && toType.tempType.asPrimitive) {
+      // TODO: Additional verification this cast is possible.
+      init.initializer.writeExpression().writeCast(toType.tempType).source.writeVariableReference(source.result);
+    // } else {
+    //   this.logAssert(`Implicit cast invalid: from ${fromType.debugName} to ${toType.debugName}.`);
+    }
+
+    return [outBopVar.result, outBopVar];
   }
 
 
@@ -917,32 +1022,194 @@ export class BopProcessor {
 
     const instantiateFunc = (typeParameters: BopFields, anonymous: boolean): BopVariable => {
       const paramDecls: BopFields = [];
-      const params: BopVariable[] = [];
+      const params: { var: BopVariable, attribs?: CodeAttributeDecl[] }[] = [];
       const autoFields: Array<{ argRef: BopVariable, identifier: string }> = [];
       let constructorBopVar: BopVariable|undefined;
       let body: BopBlock;
 
       const functionBlock = lookupInBlock.createChildBlock(CodeScopeType.Function);
       if (isMethod) {
-        params.push(functionBlock.mapIdentifier('this', methodThisType.assignableRefType, methodThisType));
+        params.push({ var: functionBlock.mapIdentifier('this', methodThisType.assignableRefType, methodThisType) });
       } else if (isConstructor) {
         constructorBopVar = functionBlock.mapIdentifier('this', methodThisType!.assignableRefType, methodThisType!);
       }
       for (const param of typeParameters) {
         functionBlock.mapTempIdentifier(param.identifier, this.typeType).typeResult = param.type;
       }
-      for (const param of parameterSignatures) {
-        const paramType = this.resolveType(param.type, functionBlock);
-        paramDecls.push({ type: paramType, identifier: param.identifier });
 
-        const argVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
-        params.push(argVar);
+      const userReturnType = returnTypeProvider(functionBlock);
+      let returnType = userReturnType;
 
-        if (param.isAutoField) {
-          autoFields.push({ argRef: argVar, identifier: param.identifier });
+      type FuncMutatorFunc = (funcWriter: CodeFunctionWriter) => void;
+      let paramRewriter: FuncMutatorFunc|undefined;
+
+      // TODO: HAXXORZZZ !!!!!
+      const isGpuVertexFunc = funcName.includes('vertexShader');
+      const isGpuFragmentFunc = funcName.includes('fragmentShader');
+      const isGpuBoundFunc = isGpuFragmentFunc || isGpuVertexFunc;
+      if (isGpuBoundFunc) {
+        const rewriterFuncs: FuncMutatorFunc[] = [];
+        rewriterFuncs.push(funcWriter => {
+          if (isGpuVertexFunc) {
+            funcWriter.addAttribute({ key: CodeAttributeKey.GpuFunctionVertex });
+          }
+          if (isGpuFragmentFunc) {
+            funcWriter.addAttribute({ key: CodeAttributeKey.GpuFunctionFragment });
+            funcWriter.addReturnAttribute({ key: CodeAttributeKey.GpuBindLocation, intValue: 0 });
+          }
+        });
+
+        if (this.verifyNotNulllike(returnType.structOf?.fields, `Vertex output is not concrete.`)) {
+          const vertexOutStructIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${funcName}_vertexOut`);
+          const vertexOutStructWriter = this.writer.global.writeStruct(vertexOutStructIdentifier);
+          const vertexOutStructScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
+          const vertexOutStructBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
+          vertexOutStructWriter.touchedByGpu = true;
+          const vertexOutStructFields: BopVariable[] = [];
+
+          let fieldIndex = 0;
+          for (const field of returnType.structOf!.fields) {
+            const attribs: CodeAttributeDecl[] = [];
+            // TODO: MEGA HAXXOR!!!
+            if (isGpuVertexFunc && field.nameHint.includes('position')) {
+              attribs.push({ key: CodeAttributeKey.GpuVertexAttributePosition });
+            } else {
+              attribs.push({ key: CodeAttributeKey.GpuBindLocation, intValue: fieldIndex });
+            }
+            const rawBopVar = vertexOutStructBlock.mapIdentifier(field.nameHint, field.type, field.bopType);
+            const rawField = vertexOutStructScope.allocateVariableIdentifier(field.type, BopIdentifierPrefix.Field, field.nameHint);
+            rawBopVar.result = rawField;
+            vertexOutStructWriter.body.writeField(rawField.identifierToken, field.type, { attribs: attribs });
+            vertexOutStructFields.push(rawBopVar);
+            fieldIndex++;
+          }
+
+          // Grrr... WebGPU disallows empty structs.
+          if (vertexOutStructWriter.body.fieldCount === 0) {
+            vertexOutStructWriter.body.writeField(vertexOutStructScope.allocateIdentifier(BopIdentifierPrefix.Field, 'placeholder'), this.intType.tempType);
+          }
+
+          const vertexOutStructType = BopType.createPassByValue({
+            debugName: `${funcName}_vertexOut`,
+            valueType: CodeTypeSpec.fromStruct(vertexOutStructIdentifier),
+            innerScope: vertexOutStructScope,
+            innerBlock: vertexOutStructBlock,
+            structOf: new BopStructType(vertexOutStructFields),
+          });
+
+          returnType = vertexOutStructType;
+        }
+
+        const vertexStructIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${funcName}_vertex`);
+        const vertexStructWriter = this.writer.global.writeStruct(vertexStructIdentifier);
+        const vertexStructScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
+        const vertexStructBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
+        vertexStructWriter.touchedByGpu = true;
+        const vertexStructType = BopType.createPassByValue({
+          debugName: `${funcName}_vertex`,
+          valueType: CodeTypeSpec.fromStruct(vertexStructIdentifier),
+          innerScope: vertexStructScope,
+          innerBlock: vertexStructBlock,
+        });
+
+        const insStructIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${funcName}_ins`);
+        const insStructWriter = this.writer.global.writeStruct(insStructIdentifier);
+        insStructWriter.touchedByGpu = true;
+        const insStructScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
+        const insStructBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
+        insStructWriter.touchedByGpu = true;
+        const insStructType = BopType.createPassByValue({
+          debugName: `${funcName}_ins`,
+          valueType: CodeTypeSpec.fromStruct(insStructIdentifier),
+          innerScope: insStructScope,
+          innerBlock: insStructBlock,
+        });
+
+        let paramIndex = 0;
+        for (const param of parameterSignatures) {
+          const paramType = this.resolveType(param.type, functionBlock);
+          paramDecls.push({ type: paramType, identifier: param.identifier });
+
+          if (paramIndex === 0) {
+            if (!this.verifyNotNulllike(paramType.structOf?.fields, `Vertex is not concrete.`)) {
+              continue;
+            }
+
+            const rawArgVar = functionBlock.mapTempIdentifier(param.identifier, vertexStructType, /* anonymous */ true);
+            params.push({ var: rawArgVar });
+
+            const mappedArgBopVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
+            let mappedArgVar!: CodeVariable;
+            rewriterFuncs.push(funcWriter => {
+              mappedArgVar = funcWriter.body.scope.allocateVariableIdentifier(paramType.tempType, BopIdentifierPrefix.Local, param.identifier);
+              mappedArgBopVar.result = mappedArgVar;
+              funcWriter.body.writeVariableDeclaration(mappedArgVar);
+            });
+
+            let fieldIndex = 0;
+            for (const field of paramType.structOf!.fields) {
+              const attribs: CodeAttributeDecl[] = [];
+              // TODO: MEGA HAXXOR!!!
+              if (isGpuFragmentFunc && field.nameHint.includes('position')) {
+                attribs.push({ key: CodeAttributeKey.GpuVertexAttributePosition });
+              } else {
+                attribs.push({ key: CodeAttributeKey.GpuBindLocation, intValue: fieldIndex });
+              }
+              const rawField = vertexStructScope.allocateIdentifier(BopIdentifierPrefix.Field, field.nameHint);
+              vertexStructWriter.body.writeField(rawField, field.type, { attribs: attribs });
+              rewriterFuncs.push(funcWriter => {
+                const copyAssign = funcWriter.body.writeAssignmentStatement();
+                copyAssign.ref.writePropertyAccess(field.result!.identifierToken).source.writeVariableReference(mappedArgVar);
+                copyAssign.value.writePropertyAccess(rawField).source.writeVariableReference(rawArgVar.result!);
+              });
+              fieldIndex++;
+            }
+          } else if (paramIndex === 1) {
+            // TODO: Fix uint.
+            // const argVar = functionBlock.mapTempIdentifier(param.identifier, this.uintType);
+            // params.push({ var: argVar, attribs: [ { key: CodeAttributeKey.GpuBindVertexIndex } ] });
+          } else if (paramIndex === 2) {
+            const paramType = this.resolveType(param.type, functionBlock);
+            const uniformBopVar = this.globalBlock.mapStorageIdentifier('testTest', paramType);
+            uniformBopVar.result = this.writer.global.scope.allocateVariableIdentifier(paramType.storageType, BopIdentifierPrefix.Local, param.identifier);
+            const argVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
+            argVar.result = uniformBopVar.result;
+
+            const varWriter = this.writer.global.writeVariableDeclaration(uniformBopVar.result);
+            varWriter.attribs.push({ key: CodeAttributeKey.GpuBindingLocation, intValue: 0 });
+            varWriter.attribs.push({ key: CodeAttributeKey.GpuVarUniform });
+
+          }
+          paramIndex++;
+        }
+        paramRewriter = (funcWriter) => {
+          for (const rewriter of rewriterFuncs) {
+            rewriter(funcWriter);
+          }
+        };
+
+        // Grrr... WebGPU disallows empty structs.
+        if (vertexStructWriter.body.fieldCount === 0) {
+          vertexStructWriter.body.writeField(vertexStructScope.allocateIdentifier(BopIdentifierPrefix.Field, 'placeholder'), this.intType.tempType);
+        }
+        if (insStructWriter.body.fieldCount === 0) {
+          insStructWriter.body.writeField(insStructScope.allocateIdentifier(BopIdentifierPrefix.Field, 'placeholder'), this.intType.tempType);
+        }
+
+        console.log(expandShaderBindings(paramDecls, this.writer.global.scope));
+      } else {
+        for (const param of parameterSignatures) {
+          const paramType = this.resolveType(param.type, functionBlock);
+          paramDecls.push({ type: paramType, identifier: param.identifier });
+
+          const argVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
+          params.push({ var: argVar });
+
+          if (param.isAutoField) {
+            autoFields.push({ argRef: argVar, identifier: param.identifier });
+          }
         }
       }
-      const returnType = returnTypeProvider(functionBlock);
 
       const newFunctionType = BopType.createFunctionType({
         debugName: funcName,
@@ -977,24 +1244,26 @@ export class BopProcessor {
           this.block = oldBlock;
         },
         produceResult: () => {
-          const ret = this.writer.global.writeFunction(concreteFunctionIdentifier.identifierToken);
-          ret.touchedByProxy = {
+          const funcWriter = this.writer.global.writeFunction(concreteFunctionIdentifier.identifierToken);
+          funcWriter.touchedByProxy = {
             get touchedByCpu() { return concreteImpl.touchedByCpu; },
             get touchedByGpu() { return concreteImpl.touchedByGpu; },
           };
 
           let constructorOutVar;
           if (constructorBopVar) {
-            constructorOutVar = ret.body.scope.allocateVariableIdentifier(methodThisType!.storageType, BopIdentifierPrefix.Local, 'New');
-            ret.body.writeVariableDeclaration(constructorOutVar);
+            constructorOutVar = funcWriter.body.scope.allocateVariableIdentifier(methodThisType!.storageType, BopIdentifierPrefix.Local, 'New');
+            funcWriter.body.writeVariableDeclaration(constructorOutVar);
             constructorBopVar.result = constructorOutVar;
           }
 
-          ret.returnTypeSpec = returnType.tempType;
+          funcWriter.returnTypeSpec = returnType.tempType;
           for (const param of params) {
-            param.result = ret.body.scope.createVariableInScope(param.type, param.nameHint);
-            ret.addParam(param.type, param.result.identifierToken);
+            const paramVar = param.var;
+            paramVar.result = funcWriter.body.scope.allocateVariableIdentifier(paramVar.type, BopIdentifierPrefix.Local, paramVar.nameHint);
+            funcWriter.addParam(paramVar.type, paramVar.result.identifierToken, { attribs: param.attribs });
           }
+          paramRewriter?.(funcWriter);
           if (constructorOutVar) {
             for (const autoField of autoFields) {
               const fieldRef = new BopReference(autoField.identifier, methodThisType!.innerBlock);
@@ -1003,19 +1272,19 @@ export class BopProcessor {
                 return;
               }
 
-              const assign = ret.body.writeAssignmentStatement();
-              assign.ref.writePropertyAccess(fieldRef.resolvedRef.result.identifierToken).source.writeVariableReference(constructorOutVar);
+              const assign = funcWriter.body.writeAssignmentStatement();
+              assign.ref.writePropertyAccess(fieldRef.resolvedRef!.result.identifierToken).source.writeVariableReference(constructorOutVar);
               assign.value.writeVariableReference(autoField.argRef.result!);
             }
           }
 
           const oldReturnType = this.scopeReturnType;
           this.scopeReturnType = returnType;
-          this.writeBlock(body, ret.body);
+          this.writeBlock(body, funcWriter.body);
           this.scopeReturnType = oldReturnType;
 
           if (constructorOutVar) {
-            ret.body.writeReturnStatement().expr.writeVariableReference(constructorOutVar);
+            funcWriter.body.writeReturnStatement().expr.writeVariableReference(constructorOutVar);
           }
 
           return {};
@@ -1074,8 +1343,14 @@ export class BopProcessor {
         const outBopVar = this.block.mapStorageIdentifier('tmp', functionOf.returnType, /* anonymous */ true);
         const outVar = this.blockWriter.scope.createVariableInScope(outBopVar.type, this.getNodeLabel(node));
         outBopVar.result = outVar;
-        const ret = this.blockWriter.writeVariableDeclaration(outVar);
-        const funcCall = ret.initializer.writeExpression().writeStaticFunctionCall(functionRef.result!.identifierToken);
+        let callExprWriter;
+        if (functionOf.returnType === this.voidType) {
+          callExprWriter = this.blockWriter.writeExpressionStatement().expr;
+        } else {
+          const ret = this.blockWriter.writeVariableDeclaration(outVar);
+          callExprWriter = ret.initializer.writeExpression();
+        }
+        const funcCall = callExprWriter.writeStaticFunctionCall(functionRef.result!.identifierToken);
         if (functionOf.isMethod) {
           funcCall.addArg().writeVariableReference(thisRef!.result!);
         }
@@ -1091,6 +1366,32 @@ export class BopProcessor {
     const rawExpr = this.visitBlockGenerator(child);
     if (rawExpr) {
       this.block.children.push(rawExpr);
+
+      // Haxxor stuff.
+      const innerGetAuxTypeInference = rawExpr.getAuxTypeInference;
+      if (innerGetAuxTypeInference) {
+        rawExpr.getAuxTypeInference = function (this: BopStage) {
+          if (this.cachedAuxTypeInference) {
+            return this.cachedAuxTypeInference;
+          }
+          this.cachedAuxTypeInference = innerGetAuxTypeInference();
+          return this.cachedAuxTypeInference;
+        };
+      }
+
+      // Haxxor debug stuff.
+      const self = this;
+      rawExpr.debugInfo = {
+        sourceNode: child,
+        get sourceCode(): string {
+          const sourceMapRange = ts.getSourceMapRange(child);
+          let sourceSnippetStr = (sourceMapRange.source ?? self.sourceRoot).text.substring(sourceMapRange.pos, sourceMapRange.end);
+          return sourceSnippetStr;
+        },
+      };
+      (rawExpr as any).toString = function (this: BopStage) {
+        return this.debugInfo?.sourceCode;
+      };
     }
     const newExpr = rawExpr ?? {};
     return newExpr;
@@ -1243,6 +1544,10 @@ export class BopProcessor {
     // let found = this.typeMap.get(type) ?? this.typeSymbolMap.get(type.symbol);
     if (found) {
       return found;
+    }
+
+    if (type === this.tc.getNumberType()) {
+      console.log(`IS NUMBER LA`, type);
     }
 
     if ((type.flags & ts.TypeFlags.NumberLiteral) === ts.TypeFlags.NumberLiteral) {
@@ -1424,7 +1729,7 @@ export class BopProcessor {
         existingTypeInfo = { identifier, innerScope, fieldIdentifierMap };
         this.typeCoalesceMap.set(structureKey, existingTypeInfo);
 
-        const structWriter = this.writer.global.writeStruct(identifier.identifierToken).struct;
+        const structWriter = this.writer.global.writeStruct(identifier.identifierToken).body;
         for (const property of fields) {
           const fieldIdentifier = innerScope.allocateVariableIdentifier(property.type.tempType, BopIdentifierPrefix.Field, property.identifier);
           structWriter.writeField(fieldIdentifier.identifierToken, property.type.tempType);
@@ -1460,11 +1765,16 @@ export class BopProcessor {
         fieldMap.set(property.identifier, fieldVar);
       }
 
+      const structOf: BopStructType = {
+        fields: fields.map(f => fieldMap.get(f.identifier)!),
+      };
+
       const newType = BopType.createPassByValue({
           debugName: shortName,
           valueType: CodeTypeSpec.fromStruct(identifier.identifierToken),
           innerScope,
           innerBlock,
+          structOf,
       });
       if (requiresGenericLookup) {
         let genericInstances = this.typeGenericMap.get(genericBase!);
@@ -1477,7 +1787,6 @@ export class BopProcessor {
         this.typeMap.set(type, newType);
       }
       typeVar.typeResult = newType;
-
 
 
       if (!constructorDecl && existingTypeInfo.defaultConstructor) {

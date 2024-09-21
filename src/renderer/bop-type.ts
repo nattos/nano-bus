@@ -29,6 +29,12 @@ export class BopFunctionType {
   ) {}
 }
 
+export class BopStructType {
+  public constructor(
+    readonly fields: BopVariable[]
+  ) {}
+}
+
 export class BopType {
   private constructor(
     public readonly debugName: string,
@@ -38,6 +44,7 @@ export class BopType {
     public readonly passByRef: boolean,
     public readonly innerScope: CodeScope,
     public readonly innerBlock: BopBlock,
+    public readonly structOf: BopStructType|undefined,
     public readonly functionOf: BopFunctionType|undefined,
     public readonly unionOf: BopTypeUnion|undefined,
   ) {}
@@ -47,6 +54,7 @@ export class BopType {
     valueType: CodeTypeSpec,
     innerScope: CodeScope,
     innerBlock: BopBlock,
+    structOf?: BopStructType,
   }): BopType {
     return new BopType(
       options.debugName,
@@ -56,6 +64,7 @@ export class BopType {
       true,
       options.innerScope,
       options.innerBlock,
+      options.structOf,
       undefined,
       undefined,
     );
@@ -66,6 +75,7 @@ export class BopType {
     valueType: CodeTypeSpec,
     innerScope: CodeScope,
     innerBlock: BopBlock,
+    structOf?: BopStructType|undefined,
   }): BopType {
     return new BopType(
       options.debugName,
@@ -75,6 +85,7 @@ export class BopType {
       false,
       options.innerScope,
       options.innerBlock,
+      options.structOf,
       undefined,
       undefined,
     );
@@ -96,6 +107,7 @@ export class BopType {
       options.innerScope,
       options.innerBlock,
       undefined,
+      undefined,
       options.unionOf,
     );
   }
@@ -114,6 +126,7 @@ export class BopType {
       false,
       options.innerScope,
       options.innerBlock,
+      undefined,
       options.functionOf,
       undefined,
     );

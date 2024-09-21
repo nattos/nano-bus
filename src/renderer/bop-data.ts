@@ -13,9 +13,26 @@ export interface BopStage {
   resolveStorage?(): void;
   produceResult?(): BopResult|undefined;
 
-  isAssignableRef?: boolean;
+  getAuxTypeInference?(): BopAuxTypeInference;
 
+  isAssignableRef?: boolean;
   resolvedIdentifiers?: boolean;
+  cachedAuxTypeInference?: BopAuxTypeInference;
+  debugInfo?: BopStageDebug;
+}
+
+export enum BopInferredNumberType {
+  Int = 'int',
+  Float = 'float',
+}
+
+export interface BopAuxTypeInference {
+  numberType?: BopInferredNumberType;
+}
+
+export interface BopStageDebug {
+  sourceNode?: any;
+  get sourceCode(): string;
 }
 
 export class BopGenericFunctionInstance {

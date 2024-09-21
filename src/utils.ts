@@ -322,6 +322,17 @@ export function parseIntOr(str: string|undefined, defaultValue?: number) {
   return result;
 }
 
+export function parseFloatOr(str: string|undefined, defaultValue?: number) {
+  if (str === undefined) {
+    return defaultValue;
+  }
+  const result = parseFloat(str);
+  if (Number.isNaN(result)) {
+    return defaultValue;
+  }
+  return result;
+}
+
 export function formatDuration(durationSeconds: number|undefined): string {
   if (durationSeconds === undefined) {
     return '';

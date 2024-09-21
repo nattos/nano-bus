@@ -13,6 +13,7 @@ import { getBrowserWindow } from './renderer-ipc';
 import { handlesFromDataTransfer } from './paths';
 import { adoptCommonStyleSheets } from './stylesheets';
 import * as bop from './bop';
+import { SharedMTLInternals } from './bop-javascript-lib';
 
 RecyclerView; // Necessary, possibly beacuse RecyclerView is templated?
 
@@ -55,9 +56,239 @@ export interface QueryToken {
 
 
 
+const shaders = `
+alias BopLib_Array_0 = array<s57_TriangleVertex>;
+struct s57_TriangleVertex {
+  @builtin(position) f_0_position: vec4f,
+  f_1_color: vec4f,
+};
+struct s58__placeholder_float_ {
+  f_0_placeholder: f32,
+};
+struct s59__alpha_float_ {
+  f_0_alpha: f32,
+};
+struct s62__alpha_number_ {
+  f_0_alpha: i32,
+};
+struct s63__placeholder_number_ {
+  f_0_placeholder: i32,
+};
+fn F1_gpuTest(v_0_value: f32) -> f32 {
+  var v_1_Identifier: f32 = v_0_value;
+  var v_2_NumericLiteral: i32 = 1;
+  var v_3_coersion: f32 = f32(v_2_NumericLiteral);
+  var v_4_BinaryExpression: f32 = (v_1_Identifier + v_3_coersion);
+  return v_4_BinaryExpression;
+}
 
 
-function doTest() {
+struct F2_TRAMPOLINE_vertexShader_out {
+  @builtin(position) f_0_position: vec4f,
+  @location(0) f_1_color: vec4f,
+};
+
+@vertex
+fn F2_TRAMPOLINE_vertexShader(
+    @location(0) v1: vec4f,
+    @location(1) v2: vec4f,
+    @location(2) v3: f32,
+    @builtin(instance_index) v_1_threadId: u32,
+) -> F2_TRAMPOLINE_vertexShader_out {
+  var v_3_Identifier: s57_TriangleVertex = s57_TriangleVertex(v1, v2);
+  var v_2_options: s58__placeholder_float_ = s58__placeholder_float_(v3);
+  var tmpOut = F2_vertexShader(v_3_Identifier, v_1_threadId, v_2_options);
+  return F2_TRAMPOLINE_vertexShader_out(tmpOut.f_0_position, tmpOut.f_1_color);
+}
+
+fn F2_vertexShader(v_0_position: s57_TriangleVertex, v_1_threadId: u32, v_2_options: s58__placeholder_float_) -> s57_TriangleVertex {
+  var v_3_Identifier: s57_TriangleVertex = v_0_position;
+  return v_3_Identifier;
+}
+
+struct F3_TRAMPOLINE_fragmentShader_out {
+  @location(0) color: vec4f,
+}
+
+@group(0) @binding(0) var<storage, read_write> b2: array<f32>;
+@group(0) @binding(1) var<storage, read_write> b3: array<f32>;
+@group(0) @binding(2) var<storage, read_write> b4: array<f32>;
+@group(0) @binding(3) var<storage, read_write> b5: array<f32>;
+@group(0) @binding(4) var<uniform> b6: s63__placeholder_number_;
+
+@fragment
+fn F3_TRAMPOLINE_fragmentShader(
+    vin: F2_TRAMPOLINE_vertexShader_out,
+    @location(1) v1: f32,
+) -> F3_TRAMPOLINE_fragmentShader_out {
+  // _ = &b2;
+  // _ = &b3;
+  // _ = &b4;
+  // _ = &b5;
+  // var value: ptr<function, s63__placeholder_number_> = &b6;
+  // _ = t;
+  // _ = s;
+
+  var t_0_position: s57_TriangleVertex = s57_TriangleVertex(vin.f_0_position, vin.f_1_color);
+  var t_1_threadId: i32 = i32(0);
+  var t_2_options: s59__alpha_float_ = s59__alpha_float_(v1);
+  var fout = F3_fragmentShader(t_0_position, t_1_threadId, t_2_options);
+  return F3_TRAMPOLINE_fragmentShader_out(fout);
+}
+
+fn F3_fragmentShader(v_0_position: s57_TriangleVertex, v_1_threadId: i32, v_2_options: s59__alpha_float_) -> vec4f {
+  var v_3_Identifier: s57_TriangleVertex = v_0_position;
+  var v_4_PropertyAccessExpression: vec4f = v_3_Identifier.f_1_color;
+  var v_5_color: vec4f = v_4_PropertyAccessExpression;
+  var v_7_Identifier: s59__alpha_float_ = v_2_options;
+  var v_8_PropertyAccessExpression: f32 = v_7_Identifier.f_0_alpha;
+  var v_9_CallExpression: f32 = F1_gpuTest(v_8_PropertyAccessExpression);
+  BopLib_float4_set_w(&v_5_color, v_9_CallExpression);
+  var v_11_Identifier: vec4f = v_5_color;
+  return v_11_Identifier;
+}
+
+fn BopLib_float4_set_x(t: ptr<function, vec4f>, v: f32) { t.x = v; }
+fn BopLib_float4_set_y(t: ptr<function, vec4f>, v: f32) { t.y = v; }
+fn BopLib_float4_set_z(t: ptr<function, vec4f>, v: f32) { t.z = v; }
+fn BopLib_float4_set_w(t: ptr<function, vec4f>, v: f32) { t.w = v; }
+
+
+
+
+struct VertexOut {
+  @builtin(position) position : vec4f,
+  @location(0) color : vec4f
+}
+
+@vertex
+fn vertex_main(@location(0) position: vec4f,
+               @location(1) color: vec4f) -> VertexOut {
+  var output : VertexOut;
+  output.position = position;
+  output.color = color;
+  var a = 1.0;
+  var b = 1f;
+  var c = a + b;
+  return output;
+}
+
+@fragment
+fn fragment_main(fragData: VertexOut) -> @location(0) vec4f {
+  return fragData.color;
+}
+`;
+
+async function doTest(canvas: HTMLCanvasElement) {
+  const adapter = await navigator.gpu.requestAdapter();
+  const device = await adapter?.requestDevice();
+  if (!adapter || !device) {
+    return;
+  }
+  const shaderModule = device.createShaderModule({
+    code: shaders,
+  });
+  const compilationInfo = await shaderModule.getCompilationInfo();
+  if (compilationInfo.messages.length > 0) {
+    console.log(compilationInfo.messages.map(m => `${m.lineNum}:${m.linePos} ${m.type}: ${m.message}`).join('\n'));
+  }
+
+  const context = canvas.getContext("webgpu");
+  if (!context) {
+    return;
+  }
+
+  if (true as any) {
+    SharedMTLInternals().setTargetCanvasContext(context);
+    doTest2();
+  } else {
+    context.configure({
+      device: device,
+      format: navigator.gpu.getPreferredCanvasFormat(),
+      alphaMode: 'premultiplied',
+    });
+
+    const vertices = new Float32Array([
+      0.0, 0.6, 0, 1,
+      1, 0, 0, 1,
+
+      -0.5, -0.6, 0, 1,
+      0, 1, 0, 1,
+
+      0.5, -0.6, 0, 1,
+      0, 0, 1, 1,
+    ]);
+    const vertexBuffer = device.createBuffer({
+      size: vertices.byteLength,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+    });
+    device.queue.writeBuffer(vertexBuffer, 0, vertices, 0, vertices.length);
+    const vertexBuffers: GPUVertexBufferLayout[] = [
+      {
+        attributes: [
+          {
+            shaderLocation: 0, // position
+            offset: 0,
+            format: 'float32x4',
+          },
+          {
+            shaderLocation: 1, // color
+            offset: 16,
+            format: 'float32x4',
+          },
+        ],
+        arrayStride: 32,
+        stepMode: 'vertex',
+      },
+    ];
+    const pipelineDescriptor: GPURenderPipelineDescriptor = {
+      vertex: {
+        module: shaderModule,
+        entryPoint: 'vertex_main',
+        buffers: vertexBuffers,
+      },
+      fragment: {
+        module: shaderModule,
+        entryPoint: 'fragment_main',
+        targets: [
+          {
+            format: navigator.gpu.getPreferredCanvasFormat(),
+          },
+        ],
+      },
+      primitive: {
+        topology: 'triangle-list',
+      },
+      layout: 'auto',
+    };
+    const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
+
+    const commandEncoder = device.createCommandEncoder();
+    const clearColor: GPUColor = { r: 0.0, g: 0.5, b: 1.0, a: 1.0 };
+    const renderPassDescriptor: GPURenderPassDescriptor = {
+      colorAttachments: [
+        {
+          clearValue: clearColor,
+          loadOp: 'clear',
+          storeOp: 'store',
+          view: context.getCurrentTexture().createView(),
+        },
+      ],
+    };
+
+    const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+    passEncoder.setPipeline(renderPipeline);
+    passEncoder.setVertexBuffer(0, vertexBuffer);
+    passEncoder.draw(3);
+    passEncoder.end();
+
+    device.queue.submit([commandEncoder.finish()]);
+  }
+}
+
+
+
+function doTest2() {
 
   // const func = new FunctionExpression(
   //   'something',
@@ -350,12 +581,12 @@ function doTest() {
 const code = `
 
 interface TriangleVertex {
-  /* @position */ position: float2;
+  /* @position */ position: float4;
   color: float4;
 }
 
-function gpuTest(value: float) {
-  return value + 1;
+function gpuTest(value: float): float {
+  return value + 0.1;
 }
 
 @vertexShader
@@ -365,7 +596,7 @@ function vertexShader(position: TriangleVertex, threadId: int, options: { placeh
 @fragmentShader
 function fragmentShader(position: TriangleVertex, threadId: int, options: { alpha: float }): float4 {
   const color = position.color;
-  color.a = gpuTest(options.alpha);
+  color.x = gpuTest(options.alpha);
   return color;
 }
 function test() {}
@@ -383,12 +614,12 @@ function drawTriangle() {
   // }
 
   const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
-  positions.push({ position: new float2(0, 0), color: new float4(0, 0, 1, 1) });
-  positions.push({ position: new float2(1, 0), color: new float4(1, 0, 1, 1) });
-  positions.push({ position: new float2(1, 1), color: new float4(1, 1, 1, 1) });
+  positions.push({ position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) });
+  positions.push({ position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) });
+  positions.push({ position: new float4(1, 1.5, 0, 1), color: new float4(1, 1, 1, 1) });
   // const positions = generateTriangleVertices(10);
 
-  Gpu.renderElements(positions.length, vertexShader, fragmentShader)(positions, { placeholder: 1 })({ alpha: 0.5 });
+  Gpu.renderElements(positions.length, vertexShader, fragmentShader)(positions, { placeholder: 0.9 })({ alpha: 0.5 });
 }
 `;
 
@@ -484,6 +715,7 @@ export class NanoApp extends LitElement {
   static instance?: NanoApp;
 
   @query('#query-input') queryInputElement!: HTMLInputElement;
+  @query('#gpu-canvas') gpuCanvas!: HTMLCanvasElement;
   @property() overlay?: Overlay;
   @property() windowActive = true;
   @observable dragDropState = DragDropState.NotStarted
@@ -513,7 +745,10 @@ export class NanoApp extends LitElement {
     window.addEventListener('drop', this.doDragDropDrop.bind(this));
     window.addEventListener('dragover', this.doDragDropDragOver.bind(this));
     window.addEventListener('dragleave', this.doDragDropDragLeave.bind(this));
-    doTest();
+
+    setTimeout(() => {
+      doTest(this.gpuCanvas);
+    });
   }
 
   @action
@@ -907,6 +1142,9 @@ export class NanoApp extends LitElement {
       'window-deactive': !this.windowActive,
     })}>
   ${this.renderTitleBar()}
+  <div>
+    <canvas id="gpu-canvas"></canvas>
+  </div>
   <div class="tracks-view-area">
     <recycler-view class="tracks-view" id="track-list-view"></recycler-view>
     ${this.renderQueryOverlay()}

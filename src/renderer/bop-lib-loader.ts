@@ -1,7 +1,7 @@
 import * as utils from '../utils';
 import * as ts from "typescript";
 import { CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
-import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType } from './bop-type';
+import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType, BopFunctionConcreteImplDetail } from './bop-type';
 import { BopBlock, BopIdentifierPrefix, BopGenericFunction, BopPropertyAccessor, BopVariable } from './bop-data';
 
 export type ResolvedType = { name?: string, bopType?: BopType, typeArgs: ResolvedType[] };
@@ -26,6 +26,7 @@ export function loadBopLib(host: {
   readonly voidType: BopType;
   readonly undefinedType: BopType;
   readonly undefinedConstant: BopVariable;
+  readonly bopFunctionConcreteImpls: BopFunctionConcreteImplDetail[];
 
   readonly typeMap: Map<ts.Type, BopType>;
 
@@ -411,11 +412,19 @@ export function loadBopLib(host: {
 
             const concreteFunctionVar = host.globalBlock.mapTempIdentifier(debugInstantiatedMethodName, newFunctionType, /* anonymous */ true);
             const concreteFunctionIdentifier = host.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, debugInstantiatedMethodName);
+            const concreteImpl = new BopFunctionConcreteImplDetail(concreteFunctionVar);
+            newFunctionType.functionOf!.concreteImpl = concreteImpl;
+            host.bopFunctionConcreteImpls.push(concreteImpl);
             concreteFunctionVar.result = concreteFunctionIdentifier;
 
             // Write the trampoline function body.
             const funcScope = host.writer.global.scope.createChildScope(CodeScopeType.Function);
             const func = host.writer.global.writeFunction(concreteFunctionIdentifier.identifierToken);
+            func.touchedByProxy = {
+              get touchedByCpu() { return concreteImpl.touchedByCpu; },
+              get touchedByGpu() { return concreteImpl.touchedByGpu; },
+            };
+
             func.returnTypeSpec = returnType.storageType;
             const paramVars: CodeVariable[] = [];
             for (const param of paramDecls) {
@@ -424,7 +433,7 @@ export function loadBopLib(host: {
               paramVars.push(paramVar);
             }
             const externIdentifier = funcScope.allocateIdentifier(BopIdentifierPrefix.Extern, debugInstantiatedMethodName);
-            const externFuncCall = func.body.writeExpressionStatement().expr.writeStaticFunctionCall(externIdentifier);
+            const externFuncCall = func.body.writeReturnStatement().expr.writeStaticFunctionCall(externIdentifier);
             for (const typeArg of methodTypeArgs) {
               let typeArgType: CodeTypeSpec|undefined;
               // TODO: Fix this crude resolution.
@@ -468,6 +477,8 @@ export function loadBopLib(host: {
         const getterBopVar = newType.type.innerBlock.mapIdentifier(getterType.debugName, getterType.tempType, getterType, /* anonymous */ true);
         const getterVar = newType.type.innerScope.createVariableInScope(getterBopVar.type, getterBopVar.nameHint);
         getterBopVar.result = getterVar;
+        getterType.functionOf!.concreteImpl = new BopFunctionConcreteImplDetail(getterBopVar);
+        host.bopFunctionConcreteImpls.push(getterType.functionOf!.concreteImpl);
         host.writer.mapInternalToken(getterVar.identifierToken, getterName);
 
         const setterType = BopType.createFunctionType({
@@ -483,6 +494,8 @@ export function loadBopLib(host: {
         const setterBopVar = newType.type.innerBlock.mapIdentifier(setterType.debugName, setterType.tempType, setterType, /* anonymous */ true);
         const setterVar = newType.type.innerScope.createVariableInScope(setterBopVar.type, setterBopVar.nameHint);
         setterBopVar.result = setterVar;
+        setterType.functionOf!.concreteImpl = new BopFunctionConcreteImplDetail(setterBopVar);
+        host.bopFunctionConcreteImpls.push(setterType.functionOf!.concreteImpl);
         host.writer.mapInternalToken(setterVar.identifierToken, setterName);
 
         propVar.propertyResult = new BopPropertyAccessor(getterBopVar, setterBopVar);

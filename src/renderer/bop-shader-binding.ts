@@ -1,9 +1,84 @@
 import * as ts from "typescript";
-import { CodeScopeType, CodeTypeSpec, CodeVariable } from './code-writer';
-import { BopType } from './bop-type';
+import { CodeNamedToken, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable } from './code-writer';
+import { BopFields, BopType } from './bop-type';
 import { getNodeLabel } from './ts-helpers';
 import { BopStage, BopIdentifierPrefix } from './bop-data';
 import { BopProcessor } from './bop-processor';
+
+
+interface BopShaderBindingSubLocation {
+  field: CodeNamedToken;
+  location: BopShaderBindingLocation;
+}
+
+interface BopShaderBindingLocation {
+  location?: number;
+  sublocations?: BopShaderBindingSubLocation[];
+  isPosition?: true;
+  uniform?: CodeNamedToken;
+  storage?: CodeNamedToken;
+}
+
+interface BopShaderBinding {
+  identifier: string;
+  location: BopShaderBindingLocation;
+}
+
+export function expandShaderBindings(paramDecls: BopFields, globalScope: CodeScope): BopShaderBinding[] {
+  const bindings: BopShaderBinding[] = [];
+
+  // HACK! Assume first parameter is vertex attributes.
+  const vertexAttributes = paramDecls[0];
+  const rootSublocations: BopShaderBindingSubLocation[] = [];
+  for (const subfield of vertexAttributes.type.structOf!.fields) {
+    const subfieldIdentifier = subfield.result!.identifierToken;
+    addLocationsRec(subfieldIdentifier, subfield.bopType, rootSublocations);
+  }
+  bindings.push({
+    identifier: vertexAttributes.identifier,
+    location: { sublocations: rootSublocations },
+  })
+
+  for (const paramDecl of paramDecls.slice(1)) {
+    bindings.push({
+      identifier: paramDecl.identifier,
+      location: { uniform: globalScope.allocateIdentifier(BopIdentifierPrefix.Field, paramDecl.identifier) },
+    });
+  }
+  return bindings;
+}
+
+function addLocationsRec(fieldIdentifier: CodeNamedToken, type: BopType, into: BopShaderBindingSubLocation[]) {
+  if (type.structOf) {
+    const sublocations: BopShaderBindingSubLocation[] = [];
+    for (const subfield of type.structOf.fields) {
+      const subfieldIdentifier = subfield.result!.identifierToken;
+      addLocationsRec(subfieldIdentifier, subfield.bopType, sublocations);
+    }
+    into.push({
+      field: fieldIdentifier,
+      location: { sublocations: sublocations },
+    });
+  } else {
+    if (fieldIdentifier?.nameHint === 'position') {
+      into.push({
+        field: fieldIdentifier,
+        location: {
+          location: into.length,
+        },
+      });
+    } else if (fieldIdentifier) {
+      into.push({
+        field: fieldIdentifier,
+        location: {
+          location: into.length,
+        },
+      });
+    }
+  }
+}
+
+
 
 export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): BopStage|undefined {
   // Hacky special cases!!! These are necessary for now since specialized
@@ -37,14 +112,21 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
 
   const fragmentArgBops = fragmentCallNode.arguments.map(arg => this.visitChild(arg));
   const vertexArgBops =  vertexCallNode.arguments.map(arg => this.visitChild(arg));
-  const renderElementsArgBops = renderElementsCallNode.arguments.map(arg => this.visitChild(arg));
-  if (renderElementsArgBops.length !== 3) {
-    this.logAssert(`Call to Gpu.renderElements takes 3 arguments (${renderElementsArgBops.length} provided).`);
+
+  const renderElementsArgs = renderElementsCallNode.arguments;
+  if (renderElementsArgs.length !== 3) {
+    this.logAssert(`Call to Gpu.renderElements takes 3 arguments (${renderElementsArgs.length} provided).`);
     return;
   }
-  const primitiveCountBop = renderElementsArgBops[0];
-  const vertexFunctionBop = renderElementsArgBops[1];
-  const fragmentFunctionBop = renderElementsArgBops[2];
+
+  const primitiveCountBop = this.visitChild(renderElementsArgs[0]);
+  // Prevent temporaries from getting created. We only need the names, not
+  // references, since these will be GPU only.
+  const oldAsAssignableRef = this.asAssignableRef;
+  this.asAssignableRef = true;
+  const vertexFunctionBop = this.visitChild(renderElementsArgs[1]);
+  const fragmentFunctionBop = this.visitChild(renderElementsArgs[2]);
+  this.asAssignableRef = oldAsAssignableRef;
 
   return {
     resolveIdentifiers: () => {},
@@ -70,9 +152,14 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
       fragmentFunctionConcreteImpl.touchedByGpu = true;
 
       const pipelineInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLRenderPipelineDescriptor.storageType, BopIdentifierPrefix.Field, `${pipelineName}_pipeline`);
-      this.instanceBlockWriter.writeField(pipelineInstanceVar.identifierToken, this.privateTypes.MTLRenderPipelineDescriptor.storageType);
+      this.instanceBlockWriter.body.writeField(pipelineInstanceVar.identifierToken, this.privateTypes.MTLRenderPipelineDescriptor.storageType);
       const renderPassDescriptorInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLRenderPassDescriptor.storageType, BopIdentifierPrefix.Field, `${pipelineName}_renderPassDescriptor`);
-      this.instanceBlockWriter.writeField(renderPassDescriptorInstanceVar.identifierToken, this.privateTypes.MTLRenderPassDescriptor.storageType);
+      this.instanceBlockWriter.body.writeField(renderPassDescriptorInstanceVar.identifierToken, this.privateTypes.MTLRenderPassDescriptor.storageType);
+
+      const vertexFunctionInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLFunction.storageType, BopIdentifierPrefix.Field, `${pipelineName}_vertexShader`);
+      this.instanceBlockWriter.body.writeField(vertexFunctionInstanceVar.identifierToken, this.privateTypes.MTLFunction.storageType);
+      const fragmentFunctionInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLFunction.storageType, BopIdentifierPrefix.Field, `${pipelineName}_fragmentShader`);
+      this.instanceBlockWriter.body.writeField(fragmentFunctionInstanceVar.identifierToken, this.privateTypes.MTLFunction.storageType);
 
       // Resolve fragment function.
       // Emit a wrapper GPU fragment function.
@@ -106,6 +193,17 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         const fragmentFunction = blockWriter.writeVariableDeclaration(fragmentFunctionVar);
         const fragmentFunctionInit = fragmentFunction.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MTLLibraryNewFunctionWithName'));
         fragmentFunctionInit.addArg().writeLiteralStringToken(fragmentFuncIdentifier, { managed: true });
+
+        {
+          const assign = blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(vertexFunctionInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+          assign.value.writeVariableReference(vertexFunctionVar);
+        }
+        {
+          const assign = blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(fragmentFunctionInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+          assign.value.writeVariableReference(fragmentFunctionVar);
+        }
 
         // MTLRenderPipelineDescriptor* pipelineStateDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
         const pipelineStateDescriptorVar = allocTmpOut(this.privateTypes.MTLRenderPipelineDescriptor);
@@ -213,7 +311,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         // drawTriangle1_pipeline1 = [device newRenderPipelineStateWithDescriptor:pipelineStateDescriptor error:&error];
         {
           const assign = blockWriter.writeAssignmentStatement();
-          assign.ref.writeVariableReference(pipelineInstanceVar);
+          assign.ref.writePropertyAccess(pipelineInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
           const call = assign.value.writeStaticFunctionCall(this.writer.makeInternalToken('MTLNewRenderPipelineStateWithDescriptor'));
           call.addArg().writeVariableReference(pipelineStateDescriptorVar);
         }
@@ -258,14 +356,13 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         // drawTriangle1_renderPassDescriptor1 = renderPassDescriptor;
         {
           const assign = blockWriter.writeAssignmentStatement();
-          assign.ref.writeVariableReference(renderPassDescriptorInstanceVar);
+          assign.ref.writePropertyAccess(renderPassDescriptorInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
           assign.value.writeVariableReference(renderPassDescriptorVar);
         }
       }
 
 
       {
-        // auto positions = generateTriangleVertices(10);
         const allocTmpOut = (bopType: BopType): CodeVariable => {
           const outBopVar = this.block.mapIdentifier('tmp', bopType.tempType, bopType, /* anonymous */ true);
           const outVar = this.blockWriter.scope.createVariableInScope(outBopVar.type, getNodeLabel(node));
@@ -273,7 +370,10 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
           return outVar;
         };
 
-        const positionsVar = allocTmpOut(this.functionType);
+        // auto positions = generateTriangleVertices(10);
+        // const positionsVar = allocTmpOut(this.functionType);
+        const positionsVar = this.readResult(vertexArgBops[0]).result!;
+        const optionsVar = this.readResult(vertexArgBops[1]).result!;
 
         // Texture renderTarget = AllocatePersistentTexture(GetTrackTextureFormat(), /* salt */ 12345678);
         const renderTargetVar = allocTmpOut(this.privateTypes.Texture);
@@ -290,7 +390,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         // MTLRenderPassDescriptor* renderPassDescriptor = drawTriangle1_renderPassDescriptor1;
         const renderPassDescriptorVar = allocTmpOut(this.privateTypes.MTLRenderPassDescriptor);
         const renderPassDescriptor = this.blockWriter.writeVariableDeclaration(renderPassDescriptorVar);
-        const renderPassDescriptorInit = renderPassDescriptor.initializer.writeExpression().writeVariableReference(renderPassDescriptorInstanceVar);
+        const renderPassDescriptorInit = renderPassDescriptor.initializer.writeExpression().writePropertyAccess(renderPassDescriptorInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
         // renderPassDescriptor.colorAttachments[0].texture = renderTarget;
         {
           const assign = this.blockWriter.writeAssignmentStatement();
@@ -304,7 +404,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         // id<MTLRenderCommandEncoder> encoder = [GetCurrentCommandBuffer() renderCommandEncoderWithDescriptor:renderPassDescriptor];
         const encoderVar = allocTmpOut(this.privateTypes.MTLRenderCommandEncoder);
         const encoder = this.blockWriter.writeVariableDeclaration(encoderVar);
-        const encoderInit = encoder.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MakeRenderCommandEncoder'));
+        const encoderInit = encoder.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MakeMTLRenderCommandEncoder'));
         encoderInit.addArg().writeVariableReference(renderPassDescriptorVar);
         // encoder.label = @"RenderPrimitives";
         {
@@ -322,7 +422,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         {
           const assign = this.blockWriter.writeAssignmentStatement();
           assign.ref.writePropertyAccess(this.writer.makeInternalToken('renderPipelineState')).source.writeVariableReference(encoderVar);
-          assign.value.writeVariableReference(pipelineInstanceVar);
+          assign.value.writePropertyAccess(pipelineInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
         }
 
         // [encoder setVertexBytes:&vertexMetadata length:sizeof(vertexMetadata) atIndex:0];
@@ -330,11 +430,18 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         {
           const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderSetVertexBuffer'));
           call.addArg().writeVariableReference(encoderVar);
-          call.addArg().writeMethodCall(this.writer.makeInternalToken('GpuBuffer')).source.writeVariableReference(positionsVar);
+          call.addArg().writeVariableReference(positionsVar);
           call.addArg().writeLiteralInt(0);
-          call.addArg().writeLiteralInt(1);
+          call.addArg().writeLiteralInt(0);
         }
         // [encoder setVertexBytes:&vertexOptions length:sizeof(vertexOptions) atIndex:2];
+        {
+          const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderSetBuffer'));
+          call.addArg().writeVariableReference(encoderVar);
+          call.addArg().writeVariableReference(optionsVar);
+          call.addArg().writeLiteralInt(0);
+          call.addArg().writeLiteralInt(0);
+        }
         // [encoder setFragmentBytes:&fragmentMetadata length:sizeof(fragmentMetadata) atIndex:0];
         // [encoder setFragmentBytes:&fragmentOptions length:sizeof(fragmentOptions) atIndex:1];
 
@@ -344,8 +451,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
           call.addArg().writeVariableReference(encoderVar);
           call.addArg().writeIdentifier(this.writer.makeInternalToken('MTLPrimitiveTypeTriangle'));
           call.addArg().writeLiteralInt(0);
-          const getCountCall = call.addArg().writeMethodCall(this.writer.makeInternalToken('GetCount'));
-          getCountCall.source.writeVariableReference(positionsVar);
+          call.addArg().writeVariableReference(this.readResult(primitiveCountBop).result!);
         }
         // [encoder endEncoding];
         {
