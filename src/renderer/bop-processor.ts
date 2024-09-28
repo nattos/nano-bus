@@ -1,6 +1,6 @@
 import * as utils from '../utils';
 import * as ts from "typescript";
-import { CodeAttributeDecl, CodeAttributeKey, CodeBinaryOperator, CodeExpressionWriter, CodeFunctionWriter, CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeStatementWriter, CodeStructBodyWriter, CodeStructWriter, CodeTypeSpec, CodeVariable, CodeWriter, CodeWriterPlatform } from './code-writer';
+import { CodeAttributeDecl, CodeAttributeKey, CodeBinaryOperator, CodeExpressionWriter, CodeFunctionWriter, CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeStatementWriter, CodeStructBodyWriter, CodeStructWriter, CodeTypeSpec, CodeUnaryOperator, CodeVariable, CodeWriter, CodeWriterPlatform } from './code-writer';
 import { BopType, BopFunctionConcreteImplDetail, BopInternalTypeBuilder, BopFields, BopFunctionType, BopTypeUnion, BopStructType, BopInternalType } from './bop-type';
 import { getNodeLabel, tsGetMappedType, tsGetSourceFileOfNode, tsGetSyntaxTypeLabel, tsTypeMapper } from './ts-helpers';
 import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction, BopVariable, BopReference, BopGenericFunctionInstance, BopInferredNumberType } from './bop-data';
@@ -510,8 +510,9 @@ F5_drawTriangle();
       return {};
     } else if (ts.isExpressionStatement(node)) {
       return this.delegateToChild(node.expression);
-    } else if (ts.isVariableStatement(node)) {
-      const newVars = node.declarationList.declarations.map(decl => {
+    } else if (ts.isVariableStatement(node) || ts.isVariableDeclarationList(node)) {
+      const declarations = ts.isVariableDeclarationList(node) ? node.declarations : node.declarationList.declarations;
+      const newVars = declarations.map(decl => {
         const varType = this.resolveType(this.tc.getTypeAtLocation(decl));
         const newVar = this.block.mapTempIdentifier(decl.name.getText(), varType);
         const initializer = this.visitChildOrNull(decl.initializer);
@@ -603,6 +604,122 @@ F5_drawTriangle();
           const ret = this.blockWriter.writeConditional(branches.length);
           ret.branches[0].condWriter.writeVariableReference(condVar);
           this.writeBlock(branches[0], ret.branches[0].blockWriter);
+          return {};
+        },
+      };
+    } else if (ts.isForOfStatement(node)) {
+      if (!node.initializer ||
+          !ts.isVariableDeclarationList(node.initializer) ||
+          node.initializer.declarations.length !== 1) {
+        this.logAssert(`Malformed for statement.`);
+        return;
+      }
+      const variableDeclNode = node.initializer.declarations[0];
+      const variableName = variableDeclNode.name.getText();
+      const enumerableType = this.resolveType(this.tc.getTypeAtLocation(node.expression));
+      const elementType = this.resolveType(this.tc.getTypeAtLocation(variableDeclNode));
+      const elementRawType = enumerableType.internalTypeOf?.arrayOfType;
+      if (!this.verifyNotNulllike(elementRawType, `Unsupported enumeration over ${enumerableType.debugName}.`)) {
+        return;
+      }
+
+      const enumerableBop = this.visitChild(node.expression);
+      const oldBlock = this.block;
+      const innerBlock = oldBlock.createChildBlock(CodeScopeType.Local);
+      const elementBopVar = innerBlock.mapTempIdentifier(variableName, elementType);
+
+      this.block = innerBlock;
+      const body = this.visitInBlock(node.statement, CodeScopeType.Local);
+      this.block = oldBlock;
+
+      return {
+        produceResult: () => {
+          const indexVar = this.blockWriter.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'index');
+          const lengthVar = this.blockWriter.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'length');
+          this.blockWriter.writeVariableDeclaration(indexVar).initializer.writeExpression().writeLiteralInt(0);
+          this.blockWriter.writeVariableDeclaration(lengthVar)
+              .initializer.writeExpression().writePropertyAccess(this.writer.makeInternalToken('length'))
+              .source.writeVariableReference(this.readResult(enumerableBop).result!);
+
+          const whileLoop = this.blockWriter.writeWhileLoop();
+          const whileCond = whileLoop.condition;
+          const whileBody = whileLoop.body;
+
+          const breakCond = whileBody.writeConditional(1).branches[0];
+          const breakCondExpr = breakCond.condWriter.writeUnaryOperation(CodeUnaryOperator.LogicalNot).value.writeBinaryOperation(CodeBinaryOperator.LessThan);
+          breakCondExpr.lhs.writeVariableReference(indexVar);
+          breakCondExpr.rhs.writeVariableReference(lengthVar);
+          breakCond.blockWriter.writeBreakStatement();
+
+          const elementVar = whileBody.scope.allocateVariableIdentifier(elementBopVar.type, BopIdentifierPrefix.Local, elementBopVar.nameHint);
+          elementBopVar.result = elementVar;
+          const elementAccess = whileBody.writeVariableDeclaration(elementVar).initializer.writeExpression().writeIndexAccess();
+          elementAccess.index.writeVariableReference(indexVar);
+          elementAccess.source.writeVariableReference(this.readResult(enumerableBop).result!);
+          whileCond.writeLiteralBool(true);
+
+          const incrementStmt = whileBody.writeAssignmentStatement();
+          incrementStmt.ref.writeVariableReference(indexVar);
+          const incrementExpr = incrementStmt.value.writeBinaryOperation(CodeBinaryOperator.Add);
+          incrementExpr.lhs.writeVariableReference(indexVar);
+          incrementExpr.rhs.writeLiteralInt(1);
+
+          this.writeBlock(body, whileBody);
+          return {};
+        },
+      };
+    } else if (ts.isForStatement(node)) {
+      if (!(node.initializer && node.condition && node.incrementor)) {
+        this.logAssert(`Malformed for statement.`);
+        return;
+      }
+      const initializerBop = this.visitInBlock(node.initializer, CodeScopeType.Local);
+      const oldBlock = this.block;
+      this.block = initializerBop;
+      const conditionBop = this.visitInBlockFull(node.condition, CodeScopeType.Local);
+      const updateBop = this.visitInBlock(node.incrementor, CodeScopeType.Local);
+      const body = this.visitInBlock(node.statement, CodeScopeType.Local);
+      this.block = oldBlock;
+
+      return {
+        produceResult: () => {
+          this.writeBlock(initializerBop, this.blockWriter);
+          const whileLoop = this.blockWriter.writeWhileLoop();
+          const whileCond = whileLoop.condition;
+          const whileBody = whileLoop.body;
+          whileCond.writeLiteralBool(true);
+          this.writeBlock(conditionBop.block, whileBody);
+          const condVar = this.writeCoersionFromExpr(conditionBop.bop, this.booleanType, whileBody);
+          const breakCond = whileBody.writeConditional(1).branches[0];
+          breakCond.condWriter.writeUnaryOperation(CodeUnaryOperator.LogicalNot).value.writeVariableReference(condVar);
+          breakCond.blockWriter.writeBreakStatement();
+
+          this.writeBlock(body, whileBody);
+          this.writeBlock(updateBop, whileBody);
+          return {};
+        },
+      };
+    } else if (ts.isWhileStatement(node)) {
+      const oldBlock = this.block;
+      const innerBlock = oldBlock.createChildBlock(CodeScopeType.Local);
+      this.block = innerBlock;
+      const conditionBop = this.visitInBlockFull(node.expression, CodeScopeType.Local);
+      const body = this.visitInBlock(node.statement, CodeScopeType.Local);
+      this.block = oldBlock;
+
+      return {
+        produceResult: () => {
+          const whileLoop = this.blockWriter.writeWhileLoop();
+          const whileCond = whileLoop.condition;
+          const whileBody = whileLoop.body;
+          whileCond.writeLiteralBool(true);
+          this.writeBlock(conditionBop.block, whileBody);
+          const condVar = this.writeCoersionFromExpr(conditionBop.bop, this.booleanType, whileBody);
+          const breakCond = whileBody.writeConditional(1).branches[0];
+          breakCond.condWriter.writeUnaryOperation(CodeUnaryOperator.LogicalNot).value.writeVariableReference(condVar);
+          breakCond.blockWriter.writeBreakStatement();
+
+          this.writeBlock(body, whileBody);
           return {};
         },
       };
@@ -875,6 +992,66 @@ F5_drawTriangle();
         }
         return { functionVar: constructorRef.resolvedRef, thisVar: undefined };
       }, node.arguments ?? []);
+    } else if (ts.isPrefixUnaryExpression(node)) {
+      const opType =
+          // node.operator === ts.SyntaxKind.PlusPlusToken ? CodeUnaryOperator.PlusPlus :
+          // node.operator === ts.SyntaxKind.MinusMinusToken ? CodeUnaryOperator.MinusMinus :
+          node.operator === ts.SyntaxKind.PlusToken ? CodeUnaryOperator.Plus :
+          node.operator === ts.SyntaxKind.MinusToken ? CodeUnaryOperator.Negate :
+          node.operator === ts.SyntaxKind.TildeToken ? CodeUnaryOperator.BitwiseNegate :
+          node.operator === ts.SyntaxKind.ExclamationToken ? CodeUnaryOperator.LogicalNot :
+          undefined;
+      if (!this.verifyNotNulllike(opType, `Unknown operator ${node.operator}.`)) {
+        return;
+      }
+
+      const isLogicalOp =
+          opType === CodeUnaryOperator.Negate ||
+          false;
+
+      const lhs = this.visitChild(node.operand);
+
+      const makeAuxTypeOr = (auxType: BopInferredNumberType|undefined, child: ts.Expression) => {
+        if (auxType === BopInferredNumberType.Int) {
+          return this.intType;
+        } else if (auxType === BopInferredNumberType.Float) {
+          return this.floatType;
+        }
+        return this.resolveType(this.tc.getTypeAtLocation(child));
+      };
+
+      let exprType: BopType;
+      let lhsType: BopType;
+      const thisStage: BopStage = {
+        getAuxTypeInference: () => {
+          // TODO: Support operators with different type patterns.
+          const lhsAuxType = lhs.getAuxTypeInference?.().numberType;
+          if (isLogicalOp) {
+            lhsType = makeAuxTypeOr(lhsAuxType, node.operand);
+            exprType = this.booleanType;
+            return {};
+          }
+
+          if (lhsAuxType) {
+            const asInt = lhsAuxType === BopInferredNumberType.Int;
+            exprType = asInt ? this.intType : this.floatType;
+          } else {
+            exprType = this.resolveType(this.tc.getTypeAtLocation(node));
+          }
+          lhsType = exprType;
+          return { numberType: exprType === this.intType ? BopInferredNumberType.Int : BopInferredNumberType.Float };
+        },
+        produceResult: () => {
+          thisStage.getAuxTypeInference!();
+          const lhsVar = this.writeCoersionFromExpr(lhs, lhsType, this.blockWriter);
+          const [outVar, outBopVar] = allocTmpOut(exprType.storageType, exprType, utils.findEnumName(CodeUnaryOperator, opType));
+          const ret = this.blockWriter.writeVariableDeclaration(outVar);
+          const op = ret.initializer.writeExpression().writeUnaryOperation(opType);
+          op.value.writeVariableReference(lhsVar);
+          return { expressionResult: outBopVar };
+        },
+      };
+      return thisStage;
     } else if (ts.isBinaryExpression(node)) {
       const opType =
           ts.isPlusToken(node.operatorToken) ? CodeBinaryOperator.Add :
@@ -896,8 +1073,28 @@ F5_drawTriangle();
         return;
       }
 
+      const isLogicalOp =
+          opType === CodeBinaryOperator.Equals ||
+          opType === CodeBinaryOperator.NotEquals ||
+          opType === CodeBinaryOperator.GreaterThan ||
+          opType === CodeBinaryOperator.GreaterThanEquals ||
+          opType === CodeBinaryOperator.LessThan ||
+          opType === CodeBinaryOperator.LessThanEquals ||
+          opType === CodeBinaryOperator.LogicalOr ||
+          opType === CodeBinaryOperator.LogicalAnd ||
+          false;
+
       const lhs = this.visitChild(node.left);
       const rhs = this.visitChild(node.right);
+
+      const makeAuxTypeOr = (auxType: BopInferredNumberType|undefined, child: ts.Expression) => {
+        if (auxType === BopInferredNumberType.Int) {
+          return this.intType;
+        } else if (auxType === BopInferredNumberType.Float) {
+          return this.floatType;
+        }
+        return this.resolveType(this.tc.getTypeAtLocation(child));
+      };
 
       let exprType: BopType;
       let lhsType: BopType;
@@ -907,6 +1104,13 @@ F5_drawTriangle();
           // TODO: Support operators with different type patterns.
           const lhsAuxType = lhs.getAuxTypeInference?.().numberType;
           const rhsAuxType = rhs.getAuxTypeInference?.().numberType;
+          if (isLogicalOp) {
+            lhsType = makeAuxTypeOr(lhsAuxType, node.left);
+            rhsType = makeAuxTypeOr(rhsAuxType, node.right);
+            exprType = this.booleanType;
+            return {};
+          }
+
           if (lhsAuxType || rhsAuxType) {
             const asInt = lhsAuxType === BopInferredNumberType.Int && rhsAuxType === BopInferredNumberType.Int;
             exprType = asInt ? this.intType : this.floatType;
@@ -1330,12 +1534,15 @@ F5_drawTriangle();
   };
 
   visitInBlock(child: ts.Node, scopeType: CodeScopeType, childBlock?: BopBlock): BopBlock {
+    return this.visitInBlockFull(child, scopeType, childBlock).block;
+  }
+  visitInBlockFull(child: ts.Node, scopeType: CodeScopeType, childBlock?: BopBlock): { block: BopBlock, bop: BopStage } {
     const oldBlock = this.block;
     const newBlock = childBlock ?? oldBlock.createChildBlock(scopeType);
     this.block = newBlock;
-    this.visitChild(child);
+    const stage = this.visitChild(child);
     this.block = oldBlock;
-    return newBlock;
+    return { block: newBlock, bop: stage };
   };
 
   private pushBlockGenerator(parentBlock: BopBlock, generator: {

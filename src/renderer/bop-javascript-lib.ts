@@ -20,9 +20,14 @@ const BopLib = {
     constructor(x: number, y: number, z: number, w: number): BopFloat4 {
       return new BopFloat4(x ?? 0.0, y ?? 0.0, z ?? 0.0, w ?? 0.0);
     },
-    set_x(self: BopFloat4, x: number) {
-      self.x = x;
-    },
+    get_x(self: BopFloat4) { return self.x; },
+    get_y(self: BopFloat4) { return self.y; },
+    get_z(self: BopFloat4) { return self.z; },
+    get_w(self: BopFloat4) { return self.w; },
+    set_x(self: BopFloat4, v: number) { self.x = v; },
+    set_y(self: BopFloat4, v: number) { self.y = v; },
+    set_z(self: BopFloat4, v: number) { self.z = v; },
+    set_w(self: BopFloat4, v: number) { self.w = v; },
   },
   Array: {
     persistent<T>(elementType: BopClass|undefined, l: number): BopArray<T> {

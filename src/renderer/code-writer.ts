@@ -714,6 +714,13 @@ export class CodeStatementWriter implements CodeWriterFragment {
     }
   }
 
+  writeEmptyStatement() {
+    const writerFunc: CodeWriterFunc = (stream, context) => {
+      this.writeFinalizeLine(stream, context);
+    }
+    this.pushWriterFunc(writerFunc);
+  }
+
   writeVariableDeclaration(thisVar: CodeVariable): {
     initializer: CodeInitializerWriter,
     attribs: CodeAttributeDecl[],
@@ -873,45 +880,30 @@ export class CodeStatementWriter implements CodeWriterFragment {
       stream.unindent();
       stream.writeToken('}');
       stream.flushLine();
-      // for (let i = 0; i < branches.length; ++i) {
-      //   const branch = branches[i];
-      //   const branchHasCondition = branch.condWriter.isDefined;
-      //   const isFirstBranch = i === 0;
-      //   const isLastBranch = i === branches.length - 1;
-      //   let conditionRequired = true;
-      //   if (isFirstBranch) {
-      //     stream.writeToken('if');
-      //     stream.writeWhitespace();
-      //   } else if (isLastBranch && !branchHasCondition) {
-      //     conditionRequired = false;
-      //     stream.writeWhitespacePadding();
-      //     stream.writeToken('else');
-      //     stream.writeWhitespace();
-      //   } else {
-      //     stream.writeWhitespacePadding();
-      //     stream.writeToken('else if');
-      //     stream.writeWhitespace();
-      //   }
-      //   if (conditionRequired && !branchHasCondition) {
-      //     throw new Error('All branches except the last must have a condition.');
-      //   }
-      //   if (branchHasCondition) {
-      //     stream.writeToken('(');
-      //     stream.indent(2);
-      //     branch.condWriter.writerFunc(stream, context);
-      //     stream.unindent(2);
-      //     stream.writeToken(')');
-      //     stream.writeWhitespace();
-      //   }
-      //   stream.writeToken('{');
-      //   stream.flushLine();
-      //   stream.indent();
-      //   branch.blockWriter.writerFunc(stream, context);
-      //   stream.flushLine();
-      //   stream.unindent();
-      //   stream.writeToken('}');
-      // }
-      // stream.flushLine();
+    });
+    return result;
+  }
+  writeWhileLoop(): { condition: CodeExpressionWriter, body: CodeStatementWriter } {
+    const conditionStmt = new CodeExpressionWriter();
+    const result = {
+      condition: conditionStmt,
+      body: new CodeStatementWriter(this.scope.createChildScope(CodeScopeType.Local)),
+    };
+    this.pushWriterFunc((stream, context) => {
+      stream.writeToken('while');
+      stream.writeWhitespace();
+      stream.writeToken('(');
+      conditionStmt.writerFunc(stream, context);
+      stream.writeToken(')');
+      stream.writeWhitespace();
+      stream.writeToken('{');
+      stream.flushLine();
+      stream.indent();
+      result.body.writerFunc(stream, context);
+      stream.flushLine();
+      stream.unindent();
+      stream.writeToken('}');
+      stream.flushLine();
     });
     return result;
   }
@@ -929,6 +921,12 @@ export class CodeStatementWriter implements CodeWriterFragment {
     });
     return result;
   }
+  writeBreakStatement() {
+    this.pushWriterFunc((stream, context) => {
+      stream.writeToken('break');
+      this.writeFinalizeLine(stream, context);
+    });
+  }
 }
 
 export class CodeBranchWriter {
@@ -939,8 +937,10 @@ export class CodeBranchWriter {
 }
 
 export enum CodeUnaryOperator {
+  Plus = '+',
   Negate = '-',
   LogicalNot = '!',
+  BitwiseNegate = '~',
 }
 
 export enum CodeBinaryOperator {
@@ -1336,7 +1336,9 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
     this.setWriter((stream, context) => {
       stream.writeToken('(');
       stream.writeToken(op.toString());
+      stream.writeToken('(');
       result.value.writerFunc(stream, context);
+      stream.writeToken(')');
       stream.writeToken(')');
     });
     return result;

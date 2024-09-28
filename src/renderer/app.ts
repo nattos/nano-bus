@@ -618,9 +618,21 @@ function drawTriangle() {
   positions.push({ position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) });
   positions.push({ position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) });
   positions.push({ position: new float4(1, 1.1, 0, 1), color: new float4(1, 1, 1, 1) });
-  positions[0].position.x = 0.4;
-  positions[1].position.x = 0.9;
+  // positions[0].position.x = 0.4;
+  // positions[1].position.x = 0.9;
   // const positions = generateTriangleVertices(10);
+  // for (let i = 0; i < positions.length; i = i + 1) {
+  // for (const v of positions) {
+  //   v.position.x = v.position.x * 0.5;
+  //   // positions[i].position.y = positions[i].position.y * 0.5;
+  // }
+  let i = 0;
+  while (i < positions.length) {
+    const v = positions[i];
+    v.position.x = v.position.x * 0.5;
+    // positions[i].position.y = positions[i].position.y * 0.5;
+    i = i + 1;
+  }
 
   Gpu.renderElements
       (positions.length, vertexShader, fragmentShader)
