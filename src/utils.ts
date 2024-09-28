@@ -608,6 +608,10 @@ export function nonvoid<T>(value: T|undefined|void): T|undefined {
   return value as T;
 }
 
+export function findEnumName<T>(enumClass: { [s: string]: T }, value: T): string|undefined {
+  return Object.entries(enumClass).find(([k, v]) => v === value)?.at(0) as string|undefined;
+}
+
 export function getEnumValues<T>(enumClass: { [s: string]: string }) {
   return Object.values(enumClass) as T[];
 }

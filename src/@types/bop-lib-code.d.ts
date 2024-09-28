@@ -217,6 +217,7 @@ interface ClampToBorderAddressMode { addressMode: 4; }
 
 interface Array<T> {
   [n: int]: T;
+  [n: number]: T;
   length: int;
 
   push(value: T): void;

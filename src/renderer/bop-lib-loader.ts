@@ -30,11 +30,12 @@ export function loadBopLib(host: {
 
   readonly typeMap: Map<ts.Type, BopType>;
 
-  resolveType(type: ts.Type, inBlock?: BopBlock): BopType;
+  resolveType(type: ts.Type, options?: { inBlock?: BopBlock }): BopType;
   createInternalType(options: {
     identifier: string,
     internalIdentifier?: string,
     anonymous?: boolean,
+    isArrayOf?: BopType,
   }): BopInternalTypeBuilder;
   createInternalGenericType(options: {
     identifier: string,
@@ -131,7 +132,7 @@ export function loadBopLib(host: {
               const typeArgType = resolveNewBopType(typeArg);
               typeArgBlock.mapIdentifier(typeParameterName, CodeTypeSpec.typeType, host.typeType).typeResult = typeArgType;
             }
-            return utils.upcast({ bopType: host.resolveType(host.tc.getTypeAtLocation(typeNode), typeArgBlock), typeArgs: [] })
+            return utils.upcast({ bopType: host.resolveType(host.tc.getTypeAtLocation(typeNode), { inBlock: typeArgBlock }), typeArgs: [] })
           };
         }
         const existingType = host.typeMap.get(host.tc.getTypeFromTypeNode(typeNode));
@@ -434,6 +435,7 @@ export function loadBopLib(host: {
             }
             const externIdentifier = funcScope.allocateIdentifier(BopIdentifierPrefix.Extern, debugInstantiatedMethodName);
             const externFuncCall = func.body.writeReturnStatement().expr.writeStaticFunctionCall(externIdentifier);
+            externFuncCall.externCallSemantics = true;
             for (const typeArg of methodTypeArgs) {
               let typeArgType: CodeTypeSpec|undefined;
               // TODO: Fix this crude resolution.
@@ -457,9 +459,14 @@ export function loadBopLib(host: {
       }
 
       for (const propDecl of type.properties) {
+        if (staticOnly) {
+          continue;
+        }
         const propName = propDecl.name;
         const propType = resolveNewBopType(propDecl.type(typeArgs)) ?? host.errorType;
         const propVar = newType.declareInternalProperty(propName, propType);
+        const propertyIdentifierToken = newType.type.innerScope.allocateIdentifier(BopIdentifierPrefix.Field, propName);
+        host.writer.mapInternalToken(propertyIdentifierToken, propName);
 
         const getterName = `${instantiatedTypeName}::get_${propName}`;
         const setterName = `${instantiatedTypeName}::set_${propName}`;
@@ -498,7 +505,7 @@ export function loadBopLib(host: {
         host.bopFunctionConcreteImpls.push(setterType.functionOf!.concreteImpl);
         host.writer.mapInternalToken(setterVar.identifierToken, setterName);
 
-        propVar.propertyResult = new BopPropertyAccessor(getterBopVar, setterBopVar);
+        propVar.propertyResult = new BopPropertyAccessor(getterBopVar, setterBopVar, { directAccessIdentifier: propertyIdentifierToken });
       }
 
       return instantiatedType;
@@ -523,10 +530,16 @@ export function loadBopLib(host: {
 
           // Instantiate the type.
           const translatedTypeArgs = typeArgs.map(typeArg => utils.upcast({ bopType: typeArg.type, typeArgs: [] }));
+          let isArrayOf: BopType|undefined;
+          // HACK!!!
+          if (type.name === 'Array' && translatedTypeArgs.length === 1) {
+            isArrayOf = translatedTypeArgs[0].bopType;
+          }
           const newType = host.createInternalType({
             identifier: type.name,
             internalIdentifier: instantiatedTypeName,
             anonymous: true,
+            isArrayOf: isArrayOf,
           });
           newBopTypeMap.set(type.name, { bopType: newType.type });
           instantiateIntoType(instantiatedTypeName, newType, translatedTypeArgs, false);

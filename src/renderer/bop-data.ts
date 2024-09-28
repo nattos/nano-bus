@@ -1,5 +1,5 @@
 import { BopFields, BopType, BopFunctionConcreteImplDetail } from "./bop-type";
-import { CodeVariable, CodeTypeSpec, CodeScopeType } from "./code-writer";
+import { CodeVariable, CodeTypeSpec, CodeScopeType, CodeNamedToken } from "./code-writer";
 
 export interface BopResult {
   expressionResult?: BopVariable;
@@ -56,6 +56,7 @@ export class BopPropertyAccessor {
   constructor(
     public readonly getter: BopVariable,
     public readonly setter: BopVariable,
+    public readonly internal?: { directAccessIdentifier?: CodeNamedToken },
   ) {}
 }
 
@@ -64,6 +65,8 @@ export class BopVariable {
   typeResult?: BopType;
   genericFunctionResult?: BopGenericFunction;
   propertyResult?: BopPropertyAccessor;
+  requiresDirectAccess?: boolean;
+  lookupBlockOverride?: BopBlock;
 
   constructor(
     public readonly nameHint: string,

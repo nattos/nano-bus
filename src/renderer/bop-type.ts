@@ -1,4 +1,5 @@
 import { BopVariable, BopBlock, BopGenericFunction } from "./bop-data";
+import { GpuBindings } from "./bop-shader-binding";
 import { CodeVariable, CodeTypeSpec, CodeScope, CodeFunctionWriter } from "./code-writer";
 
 export class BopTypeUnion {
@@ -11,12 +12,18 @@ export class BopTypeUnion {
 export class BopFunctionConcreteImplDetail {
   readonly referencedFrom = new Set<BopFunctionConcreteImplDetail>;
   readonly references = new Set<BopFunctionConcreteImplDetail>;
+  readonly gpuBindings?: GpuBindings;
   touchedByGpu = false;
   touchedByCpu = false;
 
   constructor(
     public readonly bopVar: BopVariable,
-  ) {}
+    aux?: {
+      gpuBindings?: GpuBindings;
+    },
+  ) {
+    this.gpuBindings = aux?.gpuBindings;
+  }
 }
 
 export class BopFunctionType {
@@ -35,6 +42,11 @@ export class BopStructType {
   ) {}
 }
 
+export class BopInternalType {
+  public constructor(readonly arrayOfType: BopType|undefined) {
+  }
+}
+
 export class BopType {
   private constructor(
     public readonly debugName: string,
@@ -47,6 +59,7 @@ export class BopType {
     public readonly structOf: BopStructType|undefined,
     public readonly functionOf: BopFunctionType|undefined,
     public readonly unionOf: BopTypeUnion|undefined,
+    public readonly internalTypeOf: BopInternalType|undefined,
   ) {}
 
   static createPassByRef(options: {
@@ -67,6 +80,7 @@ export class BopType {
       options.structOf,
       undefined,
       undefined,
+      undefined,
     );
   }
 
@@ -76,6 +90,7 @@ export class BopType {
     innerScope: CodeScope,
     innerBlock: BopBlock,
     structOf?: BopStructType|undefined,
+    internalTypeOf?: BopInternalType|undefined,
   }): BopType {
     return new BopType(
       options.debugName,
@@ -88,6 +103,7 @@ export class BopType {
       options.structOf,
       undefined,
       undefined,
+      options.internalTypeOf,
     );
   }
 
@@ -109,6 +125,7 @@ export class BopType {
       undefined,
       undefined,
       options.unionOf,
+      undefined,
     );
   }
 
@@ -129,21 +146,22 @@ export class BopType {
       undefined,
       options.functionOf,
       undefined,
+      undefined,
     );
   }
 }
 
 export type BopFields = Array<{ type: BopType, identifier: string }>;
 
-export type BopInternalTypeBuilder = {
-  type: BopType,
-  declareField(identifier: string, type: BopType): BopVariable,
-  declareConstructor(params: BopFields): CodeFunctionWriter,
-  declareMethod(identifier: string, params: BopFields, returnType: BopType): CodeFunctionWriter,
-  declareInternalField(identifier: string, type: BopType): void,
-  declareInternalConstructor(params: BopFields, internalIdentifier: string): void,
-  declareInternalMethod(identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType): void,
-  declareGenericMethod(identifier: string, genericFunc: BopGenericFunction): void,
-  declareInternalProperty(identifier: string, type: BopType): BopVariable,
-};
+export interface BopInternalTypeBuilder {
+  type: BopType;
+  declareField(identifier: string, type: BopType): BopVariable;
+  declareConstructor(params: BopFields): CodeFunctionWriter;
+  declareMethod(identifier: string, params: BopFields, returnType: BopType): CodeFunctionWriter;
+  declareInternalField(identifier: string, type: BopType): void;
+  declareInternalConstructor(params: BopFields, internalIdentifier: string): void;
+  declareInternalMethod(identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType): void;
+  declareGenericMethod(identifier: string, genericFunc: BopGenericFunction): void;
+  declareInternalProperty(identifier: string, type: BopType): BopVariable;
+}
 

@@ -18,12 +18,15 @@ const BopLib = {
   float4: {
     get fields() { return BopFloat4.fields; },
     constructor(x: number, y: number, z: number, w: number): BopFloat4 {
-      return new BopFloat4(x, y, z, w);
+      return new BopFloat4(x ?? 0.0, y ?? 0.0, z ?? 0.0, w ?? 0.0);
+    },
+    set_x(self: BopFloat4, x: number) {
+      self.x = x;
     },
   },
   Array: {
-    persistent<T>(l: number): BopArray<T> {
-      return new BopArray<T>(l);
+    persistent<T>(elementType: BopClass|undefined, l: number): BopArray<T> {
+      return new BopArray<T>(elementType, l);
     },
   },
 };
@@ -48,10 +51,32 @@ class BopArray<T> {
   readonly buffer: T[];
   length: number = 0;
 
-  constructor(readonly capacity: number) {
+  constructor(readonly elementType: BopClass|undefined, readonly capacity: number) {
+    const value: T = new (elementType as any)();
     this.buffer = new Array<T>(capacity);
+
+    return new Proxy(this, {
+      set(target, p, newValue, receiver) {
+        const rawValue = Reflect.get(target, p, receiver);
+        if (typeof(p) !== 'string' || rawValue !== undefined) {
+          return Reflect.set(target, p, newValue, receiver);
+        }
+        target.buffer[parseInt(p)] = newValue;
+        return true;
+      },
+      get(target, p, receiver) {
+        const rawValue = Reflect.get(target, p, receiver);
+        if (typeof(p) !== 'string' || rawValue !== undefined) {
+          return rawValue;
+        }
+        return target.buffer[parseInt(p)];
+      },
+    });
   }
 
+  at(i: number) {
+    return this.buffer[i];
+  }
   push(v: T) {
     this.buffer[this.length++] = v;
   }
@@ -60,6 +85,31 @@ class BopArray<T> {
   static get_length<T>(a: Array<T>) { return a.length; }
 };
 
+
+
+
+
+export class BufferFiller {
+  arrayBuffer;
+  float32Buffer;
+  int32Buffer;
+
+  constructor(readonly byteLength: number) {
+    this.arrayBuffer = new ArrayBuffer(byteLength);
+    this.float32Buffer = new Float32Array(this.arrayBuffer);
+    this.int32Buffer = new Float32Array(this.arrayBuffer);
+  }
+
+  writeFloat(offset: number, value: number) {
+    this.float32Buffer[offset >> 2] = value;
+  }
+  writeInt(offset: number, value: number) {
+    this.int32Buffer[offset >> 2] = value;
+  }
+  getBuffer() {
+    return this.arrayBuffer;
+  }
+}
 
 
 
@@ -364,6 +414,9 @@ class MTLRenderCommandEncoder {
   cullMode = MTLCullMode.MTLCullModeNone;
   renderPipelineState = InvalidMTLRenderPipelineState();
 
+  vertexBytes: Array<ArrayBuffer|undefined> = [];
+  fragmentBytes: Array<ArrayBuffer|undefined> = [];
+
   readonly ready;
   private readonly queue = new utils.OperationQueue();
   private readonly compileFlag = new utils.Resolvable();
@@ -396,6 +449,14 @@ class MTLRenderCommandEncoder {
       return { device, commandEncoder, encoder, renderPipeline };
     })();
     this.queue.push(() => this.ready);
+  }
+
+  setVertexBytes(buffer: ArrayBuffer, index: number) {
+    this.vertexBytes[index] = buffer;
+  }
+
+  setFragmentBytes(buffer: ArrayBuffer, index: number) {
+    this.fragmentBytes[index] = buffer;
   }
 
   queueTask(runner: (encoder: GPURenderPassEncoder, commandEncoder: GPUCommandEncoder, device: GPUDevice, renderPipeline: GPURenderPipeline) => Promise<unknown>) {
@@ -523,57 +584,55 @@ function EncoderSetVertexBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArr
     encoder.setVertexBuffer(index, vertexBuffer);
   });
 }
-function EncoderSetBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>|object, offset: number, index: number) {
-  console.log('EncoderSetBuffer', encoder, buffer, offset, index);
-  let byteArray: Float32Array;
-  if (buffer instanceof BopArray) {
-    const elementZero = buffer.buffer[0];
-    const elementClass = elementZero?.constructor as BopClass|undefined;
-    const { stride, marshalBytesIntoArrayBuffer } = getBopClassLayout(elementClass);
 
-    const byteLength = stride * buffer.length;
-    byteArray = new Float32Array(byteLength >> 2);
-    for (let i = 0; i < buffer.length; ++i) {
-      marshalBytesIntoArrayBuffer(buffer.buffer[i], i, byteArray);
-    }
-  } else {
-    const elementClass = buffer.constructor as BopClass;
-    const { stride, marshalBytesIntoArrayBuffer } = getBopClassLayout(elementClass);
-
-    const byteLength = stride;
-    byteArray = new Float32Array(byteLength >> 2);
-    marshalBytesIntoArrayBuffer(buffer, 0, byteArray);
-  }
-  encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
-    const bufferBuffer = device.createBuffer({
-      size: byteArray.byteLength,
-      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
-    });
-    device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.length);
-    const bindGroup = device.createBindGroup({
-      layout: renderPipeline.getBindGroupLayout(0),
-      entries: [{
-        binding: 0,
-        resource: {
-          buffer: bufferBuffer,
-        }
-      }]
-    });
-
-    encoder.setBindGroup(index, bindGroup);
-  });
+function EncoderSetVertexBytes(encoder: MTLRenderCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
+  console.log('EncoderSetVertexBytes', encoder, buffer, offset, index);
+  encoder.setVertexBytes(buffer, index);
 }
-function EncoderSetFragmentBuffer(encoder: MTLRenderCommandEncoder, buffer: Array<unknown>, offset: number, index: number) {
-  console.log('EncoderSetFragmentBuffer', encoder, buffer, offset, index);
-  encoder.queueTask(async (encoder) => {
-    // ??????
-    // TODO: Shadow copy buffer!!!
-    // encoder.setVertexBuffer(index, buffer.getGpuBuffer());
-  });
+function EncoderSetFragmentBytes(encoder: MTLRenderCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
+  console.log('EncoderSetFragmentBytes', encoder, buffer, offset, index);
+  encoder.setFragmentBytes(buffer, index);
 }
 function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimitiveType, offset: number, count: number) {
   console.log('EncodeDrawPrimitives', encoder, type, offset, count);
-  encoder.queueTask(async (encoder, commandEncoder, device) => {
+  const proxyEncoder = encoder;
+  encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
+    const vertexBindGroupEntries: GPUBindGroupEntry[] = [];
+    const fragmentBindGroupEntries: GPUBindGroupEntry[] = [];
+
+    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|undefined>) => {
+      const bindGroupEntries: GPUBindGroupEntry[] = [];
+      for (let index = 0; index < buffers.length; ++index) {
+        const byteArray = buffers[index];
+        if (!byteArray) {
+          continue;
+        }
+        const bufferBuffer = device.createBuffer({
+          size: byteArray.byteLength,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
+        });
+        device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
+
+        const bindGroupEntry: GPUBindGroupEntry = {
+          binding: index,
+          resource: {
+            buffer: bufferBuffer,
+          }
+        };
+        bindGroupEntries.push(bindGroupEntry);
+      }
+      return bindGroupEntries;
+    };
+    const vertexBindGroup = device.createBindGroup({
+      layout: renderPipeline.getBindGroupLayout(0),
+      entries: marshalBindGroupEntries(proxyEncoder.vertexBytes),
+    });
+    const fragmentBindGroup = device.createBindGroup({
+      layout: renderPipeline.getBindGroupLayout(1),
+      entries: marshalBindGroupEntries(proxyEncoder.fragmentBytes),
+    });
+    encoder.setBindGroup(0, vertexBindGroup);
+    encoder.setBindGroup(1, fragmentBindGroup);
     encoder.draw(count);
   });
 }

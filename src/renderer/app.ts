@@ -594,9 +594,10 @@ function vertexShader(position: TriangleVertex, threadId: int, options: { placeh
   return position;
 }
 @fragmentShader
-function fragmentShader(position: TriangleVertex, threadId: int, options: { alpha: float }): float4 {
+function fragmentShader(position: TriangleVertex, threadId: int, options: { alpha: float, beta: float, other: { theta: float }, color: float4, someBuf: TriangleVertex[] }): float4 {
   const color = position.color;
-  color.x = gpuTest(options.alpha);
+  const bufValue = options.someBuf[0].position.x;
+  color.x = gpuTest(options.alpha) / options.beta + options.other.theta;
   return color;
 }
 function test() {}
@@ -616,10 +617,15 @@ function drawTriangle() {
   const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
   positions.push({ position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) });
   positions.push({ position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) });
-  positions.push({ position: new float4(1, 1.5, 0, 1), color: new float4(1, 1, 1, 1) });
+  positions.push({ position: new float4(1, 1.1, 0, 1), color: new float4(1, 1, 1, 1) });
+  positions[0].position.x = 0.4;
+  positions[1].position.x = 0.9;
   // const positions = generateTriangleVertices(10);
 
-  Gpu.renderElements(positions.length, vertexShader, fragmentShader)(positions, { placeholder: 0.9 })({ alpha: 0.5 });
+  Gpu.renderElements
+      (positions.length, vertexShader, fragmentShader)
+      (positions, { placeholder: 0.2 })
+      ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(1, 1, 1, 1), someBuf: positions });
 }
 `;
 
