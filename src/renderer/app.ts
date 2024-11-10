@@ -177,6 +177,27 @@ fn vertex_main(@location(0) position: vec4f,
 fn fragment_main(fragData: VertexOut) -> @location(0) vec4f {
   return fragData.color;
 }
+
+
+
+
+@group(0) @binding(0) var<storage, read_write> computeShader_positions: array<VertexOut>;
+
+@compute @workgroup_size(64)
+fn computeShader(@builtin(global_invocation_id) global_id: vec3u) {
+  _ = &computeShader_positions;
+  var thread_id: i32 = i32(global_id.x);
+  var thread_count = 1;
+  if (thread_id >= thread_count) {
+    return;
+  }
+  // computeShader_positions[global_id.x].position.x = f32(global_id.x) * 1000. + f32(local_id.x);
+  var tmp = computeShader_positions[thread_id];
+  tmp.position.x += 0.3;
+  *(&computeShader_positions[thread_id]) = tmp;
+}
+
+
 `;
 
 async function doTest(canvas: HTMLCanvasElement) {
@@ -220,9 +241,44 @@ async function doTest(canvas: HTMLCanvasElement) {
     ]);
     const vertexBuffer = device.createBuffer({
       size: vertices.byteLength,
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST | GPUBufferUsage.STORAGE,
     });
     device.queue.writeBuffer(vertexBuffer, 0, vertices, 0, vertices.length);
+
+
+
+    const commandEncoder = device.createCommandEncoder();
+
+    {
+      const computePipeline = device.createComputePipeline({
+        layout: 'auto',
+        compute: {
+          module: shaderModule,
+          entryPoint: 'computeShader'
+        }
+      });
+
+      const bindGroup = device.createBindGroup({
+        layout: computePipeline.getBindGroupLayout(0),
+        entries: [{
+          binding: 0,
+          resource: {
+            buffer: vertexBuffer,
+          }
+        }]
+      });
+
+      const passEncoder = commandEncoder.beginComputePass();
+      passEncoder.setPipeline(computePipeline);
+      passEncoder.setBindGroup(0, bindGroup);
+      passEncoder.dispatchWorkgroups(Math.ceil(3 / 64));
+      passEncoder.end();
+    }
+
+
+
+
+
     const vertexBuffers: GPUVertexBufferLayout[] = [
       {
         attributes: [
@@ -263,7 +319,6 @@ async function doTest(canvas: HTMLCanvasElement) {
     };
     const renderPipeline = device.createRenderPipeline(pipelineDescriptor);
 
-    const commandEncoder = device.createCommandEncoder();
     const clearColor: GPUColor = { r: 0.0, g: 0.5, b: 1.0, a: 1.0 };
     const renderPassDescriptor: GPURenderPassDescriptor = {
       colorAttachments: [
@@ -589,15 +644,24 @@ function gpuTest(value: float): float {
   return value + 0.1;
 }
 
+function computeShader(threadId: int, options: { positions: TriangleVertex[] }) {
+  const positions = options.positions;
+  positions[0] = { position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) };
+  positions[1] = { position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) };
+  positions[2] = { position: new float4(1, 1.1, 0, 1), color: new float4(1, 1, 1, 1) };
+}
+
 @vertexShader
-function vertexShader(position: TriangleVertex, threadId: int, options: { placeholder: float }): TriangleVertex {
+function vertexSaaaahader(position: TriangleVertex, threadId: int, options: { placeholder: float }): TriangleVertex {
   return position;
 }
 @fragmentShader
-function fragmentShader(position: TriangleVertex, threadId: int, options: { alpha: float, beta: float, other: { theta: float }, color: float4, someBuf: TriangleVertex[] }): float4 {
-  const color = position.color;
+function fragmentSaaahader(position: TriangleVertex, threadId: int, options: { alpha: float, beta: float, other: { theta: float }, color: float4, someBuf: TriangleVertex[] }): float4 {
+  let color = position.color;
   const bufValue = options.someBuf[0].position.x;
+  const lenValue = options.someBuf.length;
   color.x = gpuTest(options.alpha) / options.beta + options.other.theta;
+  color = color * 5.0 + (-color) * 4.0;
   return color;
 }
 function test() {}
@@ -622,25 +686,39 @@ function drawTriangle() {
   // positions[1].position.x = 0.9;
   // const positions = generateTriangleVertices(10);
   // for (let i = 0; i < positions.length; i = i + 1) {
-  // for (const v of positions) {
+  for (const v of positions) {
+    float4.operatorAdd(v.position, v.position);
+    // v.position = v.position * 0.5;
+    // v.position.x = v.position.x * 0.5;
+    // positions[i].position.y = positions[i].position.y * 0.5;
+  }
+  // let i = 0;
+  // while (i < positions.length) {
+  //   const v = positions[i];
   //   v.position.x = v.position.x * 0.5;
   //   // positions[i].position.y = positions[i].position.y * 0.5;
+  //   i = i + 1;
   // }
-  let i = 0;
-  while (i < positions.length) {
-    const v = positions[i];
-    v.position.x = v.position.x * 0.5;
-    // positions[i].position.y = positions[i].position.y * 0.5;
-    i = i + 1;
-  }
 
-  Gpu.renderElements
-      (positions.length, vertexShader, fragmentShader)
-      (positions, { placeholder: 0.2 })
-      ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(1, 1, 1, 1), someBuf: positions });
+  Gpu.compute(positions.length, computeShader)({ positions: positions });
+
+  // Gpu.renderElements
+  //     (positions.length, vertexShader, fragmentShader)
+  //     (positions, { placeholder: 0.2 })
+  //     ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(1, 1, 1, 1), someBuf: positions });
 }
 `;
 
+
+// const code = `
+// function drawTriangle() {
+//   const lhs = new float4(1, 1, 1, 1);
+//   const rhs = new float4(1, 1, 1, 1);
+//   const a: float4 = lhs + rhs;
+//   const b: float4 = a * 5.0 - 4.0;
+//   const c = b * 5.0 - 4.0;
+// }
+// `;
 
 
 // const code = `

@@ -1,9 +1,9 @@
 import * as utils from '../utils';
 import * as ts from "typescript";
 import { CodeAttributeDecl, CodeAttributeKey, CodeBinaryOperator, CodeExpressionWriter, CodeFunctionWriter, CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeStatementWriter, CodeStructBodyWriter, CodeStructWriter, CodeTypeSpec, CodeUnaryOperator, CodeVariable, CodeWriter, CodeWriterPlatform } from './code-writer';
-import { BopType, BopFunctionConcreteImplDetail, BopInternalTypeBuilder, BopFields, BopFunctionType, BopTypeUnion, BopStructType, BopInternalType } from './bop-type';
+import { BopType, BopFunctionConcreteImplDetail, BopInternalTypeBuilder, BopFields, BopFunctionType, BopTypeUnion, BopStructType, BopInternalType, BopFunctionOf } from './bop-type';
 import { getNodeLabel, tsGetMappedType, tsGetSourceFileOfNode, tsGetSyntaxTypeLabel, tsTypeMapper } from './ts-helpers';
-import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction, BopVariable, BopReference, BopGenericFunctionInstance, BopInferredNumberType } from './bop-data';
+import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction, BopVariable, BopReference, BopGenericFunctionInstance, BopInferredNumberType, BopAuxTypeInference } from './bop-data';
 import { loadBopLib, toStringResolvedType } from './bop-lib-loader';
 import { bopRewriteShaderFunction, bopShaderBinding, FuncMutatorFunc, GpuBindings } from './bop-shader-binding';
 import { evalJavascriptInContext, SharedMTLInternals } from './bop-javascript-lib';
@@ -41,6 +41,7 @@ export class BopProcessor {
   readonly underscoreIdentifier: CodeNamedToken;
 
   readonly errorType;
+  readonly wouldBeAnyType;
   readonly typeType;
   readonly functionType;
   readonly voidType;
@@ -78,6 +79,7 @@ export class BopProcessor {
     // Map intrinsic types.
     this.underscoreIdentifier = this.writer.makeInternalToken('_');
     this.errorType = this.createPrimitiveType(CodeTypeSpec.compileErrorType);
+    this.wouldBeAnyType = this.createPrimitiveType(CodeTypeSpec.compileErrorType);
     this.functionType = this.createPrimitiveType(CodeTypeSpec.functionType);
     this.typeType = this.createPrimitiveType(CodeTypeSpec.typeType);
     this.typeMap.set(this.tc.getVoidType(), this.voidType = this.createPrimitiveType(CodeTypeSpec.voidType));
@@ -92,6 +94,9 @@ export class BopProcessor {
       MTLRenderPassDescriptor: this.createInternalType({ identifier: 'MTLRenderPassDescriptor*', anonymous: true }).type,
       MTLRenderCommandEncoder: this.createInternalType({ identifier: 'id<MTLRenderCommandEncoder>', anonymous: true }).type,
       MTLPrimitiveTypeTriangle: this.createInternalType({ identifier: 'MTLPrimitiveTypeTriangle', anonymous: true }).type,
+      MTLComputePipelineDescriptor: this.createInternalType({ identifier: 'MTLComputePipelineDescriptor*', anonymous: true }).type,
+      MTLComputePassDescriptor: this.createInternalType({ identifier: 'MTLComputePassDescriptor*', anonymous: true }).type,
+      MTLComputeCommandEncoder: this.createInternalType({ identifier: 'id<MTLComputeCommandEncoder>', anonymous: true }).type,
       BufferFiller: this.createInternalType({ identifier: 'BufferFiller', anonymous: true }).type,
     };
 
@@ -168,8 +173,10 @@ export class BopProcessor {
     evalJavascriptInContext(`
 const instanceVars = {};
 ` + cpuCode + `
-F7_DrawTriangle_prepare();
-F5_drawTriangle();
+// F8_DrawTriangle_prepare();
+F8_computeShader_prepare();
+F6_drawTriangle();
+// F1_drawTriangle();
 `);
 
     // (async () => {
@@ -289,20 +296,31 @@ F5_drawTriangle();
     }
 
     const declareFunction = (identifier: string, params: BopFields, returnType: BopType, options: { includeThis: boolean }) => {
-      const debugName = `${newType.debugName}.${identifier}`;
-      const funcIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Constructor, debugName);
-      const funcType = BopType.createFunctionType({
-        debugName: debugName,
-        innerScope: innerScope.createChildScope(CodeScopeType.Local),
-        innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
-        functionOf: new BopFunctionType(
-          params,
-          newType,
-          /* isMethod */ options.includeThis,
-        ),
-      });
+      const bopFunctionType = new BopFunctionType(
+        params,
+        newType,
+        /* isMethod */ options.includeThis,
+        0,
+      );
 
-      innerBlock.mapIdentifier(identifier, funcIdentifier.typeSpec, funcType).result = funcIdentifier;
+      let funcIdentifier;
+      const oldFunc = innerBlock.identifierMap.get(identifier);
+      if (oldFunc && oldFunc.bopType.functionOf && oldFunc.result) {
+        funcIdentifier = oldFunc.result;
+        oldFunc.bopType.functionOf.overloads.push(bopFunctionType);
+      } else {
+        const debugName = `${newType.debugName}.${identifier}`;
+        funcIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Constructor, debugName);
+        const funcType = BopType.createFunctionType({
+          debugName: debugName,
+          innerScope: innerScope.createChildScope(CodeScopeType.Local),
+          innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
+          functionOf: new BopFunctionOf([bopFunctionType]),
+        });
+        innerBlock.mapIdentifier(identifier, funcIdentifier.typeSpec, funcType).result = funcIdentifier;
+      }
+
+      // TODO: Allocate different identifier tokens for each overload.
       const funcWriter = this.writer.global.writeFunction(funcIdentifier.identifierToken);
       funcWriter.returnTypeSpec = returnType.storageType;
       return funcWriter;
@@ -325,26 +343,38 @@ F5_drawTriangle();
     };
 
     const declareInternalFunction = (identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType, options: { includeThis: boolean }) => {
-      const debugName = `${newType.debugName}.${identifier}`;
-      const funcIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Method, debugName);
-      const funcType = BopType.createFunctionType({
-        debugName: debugName,
-        innerScope: innerScope.createChildScope(CodeScopeType.Local),
-        innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
-        functionOf: new BopFunctionType(
-          params,
-          returnType,
-          /* isMethod */ options.includeThis,
-        ),
-      });
+      let funcIdentifier;
+      let overloads: BopFunctionType[];
+      const oldFunc = innerBlock.identifierMap.get(identifier);
+      if (oldFunc && oldFunc.bopType.functionOf && oldFunc.result) {
+        funcIdentifier = oldFunc.result;
+        overloads = oldFunc.bopType.functionOf.overloads;
+      } else {
+        const debugName = `${newType.debugName}.${identifier}`;
+        const funcIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Method, debugName);
+        overloads = [];
+        const funcType = BopType.createFunctionType({
+          debugName: debugName,
+          innerScope: innerScope.createChildScope(CodeScopeType.Local),
+          innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
+          functionOf: new BopFunctionOf(overloads),
+        });
+        innerBlock.mapIdentifier(identifier, funcIdentifier.typeSpec, funcType).result = funcIdentifier;
+        this.writer.mapInternalToken(funcIdentifier.identifierToken, internalIdentifier);
+      }
 
-      innerBlock.mapIdentifier(identifier, funcIdentifier.typeSpec, funcType).result = funcIdentifier;
-      this.writer.mapInternalToken(funcIdentifier.identifierToken, internalIdentifier);
+      const bopFunctionType = new BopFunctionType(
+        params,
+        returnType,
+        /* isMethod */ options.includeThis,
+        overloads.length,
+      );
+      overloads.push(bopFunctionType);
       return;
     };
 
-    const declareInternalMethod = (identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType) => {
-      return declareInternalFunction(identifier, internalIdentifier, params, returnType, { includeThis: true });
+    const declareInternalMethod = (identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType, options: { isMethod: boolean }) => {
+      return declareInternalFunction(identifier, internalIdentifier, params, returnType, { includeThis: options.isMethod });
     };
 
     const declareInternalConstructor = (params: BopFields, internalIdentifier: string) => {
@@ -513,26 +543,36 @@ F5_drawTriangle();
     } else if (ts.isVariableStatement(node) || ts.isVariableDeclarationList(node)) {
       const declarations = ts.isVariableDeclarationList(node) ? node.declarations : node.declarationList.declarations;
       const newVars = declarations.map(decl => {
-        const varType = this.resolveType(this.tc.getTypeAtLocation(decl));
-        const newVar = this.block.mapTempIdentifier(decl.name.getText(), varType);
         const initializer = this.visitChildOrNull(decl.initializer);
+        const valueAuxType = initializer?.getAuxTypeInference?.();
+        const varType = valueAuxType?.bopType ?? this.resolveType(this.tc.getTypeAtLocation(decl));
+        const newVar = this.block.mapTempIdentifier(decl.name.getText(), varType);
         return {
           variable: newVar,
           initializer: initializer,
           type: varType,
+          getAuxTypeInference() { return valueAuxType; },
         };
       });
 
       return {
         produceResult: () => {
           for (const newVar of newVars) {
-            let initializerVar = this.writeCoersionFromExpr(newVar.initializer, newVar.type, this.blockWriter);
-            const outVar = this.blockWriter.scope.createVariableInScope(newVar.variable.type, newVar.variable.nameHint);
-            const ret = this.blockWriter.writeVariableDeclaration(outVar);
-            if (initializerVar) {
-              ret.initializer.writeExpression().writeVariableReference(initializerVar);
+            if (newVar.initializer) {
+              const newVarResult = this.readResult(newVar.initializer);
+              if (newVarResult.requiresDirectAccess) {
+                newVar.variable.result = newVarResult.result;
+                newVar.variable.requiresDirectAccess = true;
+              } else {
+                let [initializerVar, initializerBopVar] = this.writeCoersion(newVarResult, newVar.type, this.blockWriter);
+                const outVar = this.blockWriter.scope.createVariableInScope(newVar.variable.type, newVar.variable.nameHint);
+                const ret = this.blockWriter.writeVariableDeclaration(outVar);
+                if (initializerVar) {
+                  ret.initializer.writeExpression().writeVariableReference(initializerVar);
+                }
+                newVar.variable.result = outVar;
+              }
             }
-            newVar.variable.result = outVar;
           }
           return {};
         },
@@ -547,8 +587,9 @@ F5_drawTriangle();
         return;
       }
 
-      const assignType = this.resolveType(this.tc.getTypeAtLocation(node.left));
       const valueExpr = this.visitChild(node.right);
+      const valueAuxType = valueExpr.getAuxTypeInference?.();
+      const assignType = valueAuxType?.bopType ?? this.resolveType(this.tc.getTypeAtLocation(node.left));
 
       return {
         produceResult: () => {
@@ -558,7 +599,7 @@ F5_drawTriangle();
           const propAccessor = refResult?.expressionResult?.propertyResult;
           if (propAccessor) {
             // This is calling a setter property.
-            const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.setter, thisVar: refResult.thisResult }), [value]);
+            const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.setter, thisVar: refResult.thisResult, functionOf: propAccessor.setter.bopType.functionOf!.overloads[0] }), [value]);
             if (!callBop) {
               return;
             }
@@ -572,7 +613,12 @@ F5_drawTriangle();
           this.asAssignableRef = oldAsAssignableRef;
 
           const ret = this.blockWriter.writeAssignmentStatement();
-          ret.ref.writeVariableReference(ref);
+          // if (refVar.requiresDirectAccess) {
+            // HACK!!! ???
+            ret.ref.writeDereferenceExpr().value.writeVariableReferenceReference(ref);
+          // } else {
+          //   ret.ref.writeVariableDereference(ref);
+          // }
           ret.value.writeVariableReference(value);
           return { expressionResult: valueRef };
         },
@@ -759,7 +805,7 @@ F5_drawTriangle();
             const propVar = propertyRef.resolvedRef.result;
             if (propAccessor) {
               // This is calling a getter property.
-              const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.getter, thisVar: fromBopVar }), []);
+              const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.getter, thisVar: fromBopVar, functionOf: propAccessor.getter.bopType.functionOf!.overloads[0] }), []);
               if (!callBop) {
                 return;
               }
@@ -916,7 +962,8 @@ F5_drawTriangle();
           functionVar = this.instantiateGenericFunction(genericFunction, typeParameters);
         }
         functionVar ??= functionRef;
-        const functionOf = functionVar.bopType.functionOf;
+        // const functionOf = functionVar.bopType.functionOf;
+        const functionOf = this.resolveFunctionOverload(functionVar.bopType, functionSignature);
         if (!this.verifyNotNulllike(functionOf, `Expression is not callable.`)) {
           return;
         }
@@ -927,7 +974,7 @@ F5_drawTriangle();
           functionOf.concreteImpl.referencedFrom.add(callingFuncConcreteImpl);
           callingFuncConcreteImpl.references.add(functionOf.concreteImpl);
         }
-        return { functionVar: functionVar, thisVar: thisRef };
+        return { functionVar: functionVar, thisVar: thisRef, functionOf };
       }, node.arguments);
     } else if (ts.isObjectLiteralExpression(node)) {
       const willCoerceFieldsTo = new Map<string, CoersionRef>();
@@ -981,16 +1028,24 @@ F5_drawTriangle();
         return;
       }
 
+      const candidatesOutArray: ts.Signature[] = [];
+      const functionSignature = this.tc.getResolvedSignature(node, candidatesOutArray, node.arguments?.length);
+      if (!this.verifyNotNulllike(functionSignature, `Function has unresolved signature.`)) {
+        return;
+      }
+      console.log(this.tc.signatureToString(functionSignature));
+
       const type = this.resolveType(this.tc.getTypeAtLocation(node));
       return this.makeCallBop(node, () => {
         // TODO: Support constructor overloads.
         const constructorRef = createBopReference('constructor', type.innerBlock);
         this.resolve(constructorRef);
+        const functionOf = this.resolveFunctionOverload(constructorRef.resolvedRef?.bopType, functionSignature);
         if (!this.verifyNotNulllike(constructorRef.resolvedRef, `Constructor for ${type.debugName} is undefined.`) ||
-            !this.verifyNotNulllike(constructorRef.resolvedRef.bopType.functionOf, `Constructor for ${type.debugName} is undefined.`)) {
+            !this.verifyNotNulllike(functionOf, `Constructor for ${type.debugName} is undefined.`)) {
           return;
         }
-        return { functionVar: constructorRef.resolvedRef, thisVar: undefined };
+        return { functionVar: constructorRef.resolvedRef, thisVar: undefined, functionOf };
       }, node.arguments ?? []);
     } else if (ts.isPrefixUnaryExpression(node)) {
       const opType =
@@ -1009,31 +1064,44 @@ F5_drawTriangle();
           opType === CodeUnaryOperator.Negate ||
           false;
 
-      const lhs = this.visitChild(node.operand);
+      const opName = utils.findEnumName(CodeUnaryOperator, opType);
+      const customOperatorName = `operator${opName}`;
 
-      const makeAuxTypeOr = (auxType: BopInferredNumberType|undefined, child: ts.Expression) => {
-        if (auxType === BopInferredNumberType.Int) {
-          return this.intType;
-        } else if (auxType === BopInferredNumberType.Float) {
-          return this.floatType;
-        }
-        return this.resolveType(this.tc.getTypeAtLocation(child));
-      };
+      const lhs = this.visitChild(node.operand);
+      const lhsRawType = this.filterWouldBeAny(this.resolveType(this.tc.getTypeAtLocation(node.operand), { allowWouldBeAny: true }));
 
       let exprType: BopType;
       let lhsType: BopType;
+      let customOperator: { bopVar: BopVariable, functionOf: BopFunctionType }|undefined = undefined;
       const thisStage: BopStage = {
         getAuxTypeInference: () => {
           // TODO: Support operators with different type patterns.
-          const lhsAuxType = lhs.getAuxTypeInference?.().numberType;
+          const lhsAuxType = lhs.getAuxTypeInference?.();
+          const lhsCustomOperatorType = this.makeCustomOperatorType(lhsRawType, lhsAuxType);
+          if (lhsCustomOperatorType) {
+            const lhsCustomOperator = lhsCustomOperatorType?.innerBlock.identifierMap.get(customOperatorName);
+            const lhsOverloads = lhsCustomOperator?.bopType.functionOf?.overloads;
+            if (lhsOverloads) {
+              let overloads = lhsOverloads;
+              const resolvedCustomOperator = this.resolveFunctionOverload(overloads, [ lhsCustomOperatorType ]);
+
+              if (resolvedCustomOperator) {
+                customOperator = { bopVar: lhsCustomOperator!, functionOf: resolvedCustomOperator };
+                lhsType = resolvedCustomOperator.args[0].type;
+                exprType = resolvedCustomOperator.returnType;
+                return { bopType: resolvedCustomOperator.returnType };
+              }
+            }
+          }
+
           if (isLogicalOp) {
-            lhsType = makeAuxTypeOr(lhsAuxType, node.operand);
             exprType = this.booleanType;
+            lhsType = lhsCustomOperatorType ?? exprType;
             return {};
           }
 
           if (lhsAuxType) {
-            const asInt = lhsAuxType === BopInferredNumberType.Int;
+            const asInt = lhsAuxType?.numberType === BopInferredNumberType.Int;
             exprType = asInt ? this.intType : this.floatType;
           } else {
             exprType = this.resolveType(this.tc.getTypeAtLocation(node));
@@ -1044,11 +1112,21 @@ F5_drawTriangle();
         produceResult: () => {
           thisStage.getAuxTypeInference!();
           const lhsVar = this.writeCoersionFromExpr(lhs, lhsType, this.blockWriter);
-          const [outVar, outBopVar] = allocTmpOut(exprType.storageType, exprType, utils.findEnumName(CodeUnaryOperator, opType));
-          const ret = this.blockWriter.writeVariableDeclaration(outVar);
-          const op = ret.initializer.writeExpression().writeUnaryOperation(opType);
-          op.value.writeVariableReference(lhsVar);
-          return { expressionResult: outBopVar };
+          if (customOperator) {
+            const resolvedFunc = { functionVar: customOperator.bopVar, thisVar: undefined, functionOf: customOperator.functionOf };
+            const callBop = this.makeCallBop(node, () => resolvedFunc, [ lhsVar ]);
+            if (!callBop) {
+              return;
+            }
+            this.doProduceResult(callBop);
+            return { expressionResult: this.readResult(callBop) };
+          } else {
+            const [outVar, outBopVar] = allocTmpOut(exprType.storageType, exprType, opName);
+            const ret = this.blockWriter.writeVariableDeclaration(outVar);
+            const op = ret.initializer.writeExpression().writeUnaryOperation(opType);
+            op.value.writeVariableReference(lhsVar);
+            return { expressionResult: outBopVar };
+          }
         },
       };
       return thisStage;
@@ -1084,35 +1162,64 @@ F5_drawTriangle();
           opType === CodeBinaryOperator.LogicalAnd ||
           false;
 
+      const opName = utils.findEnumName(CodeBinaryOperator, opType);
+      const customOperatorName = `operator${opName}`;
+
       const lhs = this.visitChild(node.left);
       const rhs = this.visitChild(node.right);
-
-      const makeAuxTypeOr = (auxType: BopInferredNumberType|undefined, child: ts.Expression) => {
-        if (auxType === BopInferredNumberType.Int) {
-          return this.intType;
-        } else if (auxType === BopInferredNumberType.Float) {
-          return this.floatType;
-        }
-        return this.resolveType(this.tc.getTypeAtLocation(child));
-      };
+      const lhsRawType = this.filterWouldBeAny(this.resolveType(this.tc.getTypeAtLocation(node.left), { allowWouldBeAny: true }));
+      const rhsRawType = this.filterWouldBeAny(this.resolveType(this.tc.getTypeAtLocation(node.right), { allowWouldBeAny: true }));
 
       let exprType: BopType;
       let lhsType: BopType;
       let rhsType: BopType;
+      let customOperator: { bopVar: BopVariable, functionOf: BopFunctionType }|undefined = undefined;
       const thisStage: BopStage = {
         getAuxTypeInference: () => {
           // TODO: Support operators with different type patterns.
-          const lhsAuxType = lhs.getAuxTypeInference?.().numberType;
-          const rhsAuxType = rhs.getAuxTypeInference?.().numberType;
+          const lhsAuxType = lhs.getAuxTypeInference?.();
+          const rhsAuxType = rhs.getAuxTypeInference?.();
+
+          const lhsCustomOperatorType = this.makeCustomOperatorType(lhsRawType, lhsAuxType);
+          const rhsCustomOperatorType = this.makeCustomOperatorType(rhsRawType, rhsAuxType);
+
+          if (lhsCustomOperatorType && rhsCustomOperatorType) {
+            const lhsCustomOperator = lhsCustomOperatorType?.innerBlock.identifierMap.get(customOperatorName);
+            const rhsCustomOperator = rhsCustomOperatorType?.innerBlock.identifierMap.get(customOperatorName);
+            const lhsOverloads = lhsCustomOperator?.bopType.functionOf?.overloads;
+            const rhsOverloads = rhsCustomOperator?.bopType.functionOf?.overloads;
+            if (lhsOverloads || rhsOverloads) {
+              let overloads;
+              if (lhsOverloads && rhsOverloads) {
+                overloads = lhsOverloads.concat(rhsOverloads);
+              } else {
+                overloads = lhsOverloads ?? rhsOverloads!;
+              }
+              const resolvedCustomOperator = this.resolveFunctionOverload(overloads, [ lhsCustomOperatorType, rhsCustomOperatorType ]);
+
+              if (resolvedCustomOperator) {
+                if (lhsOverloads?.includes(resolvedCustomOperator)) {
+                  customOperator = { bopVar: lhsCustomOperator!, functionOf: resolvedCustomOperator };
+                } else {
+                  customOperator = { bopVar: rhsCustomOperator!, functionOf: resolvedCustomOperator };
+                }
+                lhsType = resolvedCustomOperator.args[0].type;
+                rhsType = resolvedCustomOperator.args[1].type;
+                exprType = resolvedCustomOperator.returnType;
+                return { bopType: resolvedCustomOperator.returnType };
+              }
+            }
+          }
+
           if (isLogicalOp) {
-            lhsType = makeAuxTypeOr(lhsAuxType, node.left);
-            rhsType = makeAuxTypeOr(rhsAuxType, node.right);
             exprType = this.booleanType;
+            lhsType = lhsCustomOperatorType ?? exprType;
+            rhsType = rhsCustomOperatorType ?? exprType;
             return {};
           }
 
           if (lhsAuxType || rhsAuxType) {
-            const asInt = lhsAuxType === BopInferredNumberType.Int && rhsAuxType === BopInferredNumberType.Int;
+            const asInt = lhsAuxType?.numberType === BopInferredNumberType.Int && rhsAuxType?.numberType === BopInferredNumberType.Int;
             exprType = asInt ? this.intType : this.floatType;
           } else {
             exprType = this.resolveType(this.tc.getTypeAtLocation(node));
@@ -1125,12 +1232,22 @@ F5_drawTriangle();
           thisStage.getAuxTypeInference!();
           const lhsVar = this.writeCoersionFromExpr(lhs, lhsType, this.blockWriter);
           const rhsVar = this.writeCoersionFromExpr(rhs, rhsType, this.blockWriter);
-          const [outVar, outBopVar] = allocTmpOut(exprType.storageType, exprType, utils.findEnumName(CodeBinaryOperator, opType));
-          const ret = this.blockWriter.writeVariableDeclaration(outVar);
-          const op = ret.initializer.writeExpression().writeBinaryOperation(opType);
-          op.lhs.writeVariableReference(lhsVar);
-          op.rhs.writeVariableReference(rhsVar);
-          return { expressionResult: outBopVar };
+          if (customOperator) {
+            const resolvedFunc = { functionVar: customOperator.bopVar, thisVar: undefined, functionOf: customOperator.functionOf };
+            const callBop = this.makeCallBop(node, () => resolvedFunc, [ lhsVar, rhsVar ]);
+            if (!callBop) {
+              return;
+            }
+            this.doProduceResult(callBop);
+            return { expressionResult: this.readResult(callBop) };
+          } else {
+            const [outVar, outBopVar] = allocTmpOut(exprType.storageType, exprType, opName);
+            const ret = this.blockWriter.writeVariableDeclaration(outVar);
+            const op = ret.initializer.writeExpression().writeBinaryOperation(opType);
+            op.lhs.writeVariableReference(lhsVar);
+            op.rhs.writeVariableReference(rhsVar);
+            return { expressionResult: outBopVar };
+          }
         },
       };
       return thisStage;
@@ -1238,6 +1355,44 @@ F5_drawTriangle();
   }
 
 
+  resolveFunctionOverload(functionType: BopType|undefined, functionSignature: ts.Signature): BopFunctionType|undefined;
+  resolveFunctionOverload(overloads: BopFunctionType[]|undefined, functionSignature: ts.Signature): BopFunctionType|undefined;
+  resolveFunctionOverload(overloads: BopFunctionType[]|undefined, functionSignatureArgs: BopType[]): BopFunctionType|undefined;
+  resolveFunctionOverload(funcDecl: BopType|BopFunctionType[]|undefined, functionSignature: ts.Signature|BopType[]): BopFunctionType|undefined {
+    if (funcDecl === undefined) {
+      return undefined;
+    }
+    let overloads: BopFunctionType[];
+    if (funcDecl instanceof BopType) {
+      if (!funcDecl?.functionOf || funcDecl.functionOf.overloads.length === 0) {
+        return undefined;
+      }
+      overloads = funcDecl.functionOf.overloads;
+    } else {
+      overloads = funcDecl;
+    }
+    if (overloads.length === 1) {
+      return overloads[0];
+    }
+    const signatureArgTypes = functionSignature instanceof Array ? functionSignature :
+        functionSignature.parameters.map(t => this.resolveType(this.tc.getTypeOfSymbol(t)));
+    for (const overload of overloads) {
+      console.log(overload.args);
+      if (overload.args.length !== signatureArgTypes.length) {
+        continue;
+      }
+      let matches = true;
+      for (let i = 0; i < overload.args.length; ++i) {
+        if (overload.args[i].type !== signatureArgTypes[i]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        return overload;
+      }
+    }
+  }
 
   private declareFunction(node: ts.FunctionLikeDeclarationBase, methodThisType: BopType|undefined, declareInBlock: BopBlock, lookupInBlock: BopBlock, instantiateWithTypeParameters?: BopFields): BopVariable|undefined {
     const isConstructor = ts.isConstructorDeclaration(node);
@@ -1340,11 +1495,12 @@ F5_drawTriangle();
         debugName: funcName,
         innerScope: this.writer.global.scope.createChildScope(CodeScopeType.Local),
         innerBlock: functionBlock.createChildBlock(CodeScopeType.Local),
-        functionOf: new BopFunctionType(
+        functionOf: new BopFunctionOf([new BopFunctionType(
           paramDecls,
           returnType,
           !!methodThisType,
-        ),
+          0,
+        )]),
       });
 
       const concreteFunctionVar = declareInBlock.mapTempIdentifier(funcName, newFunctionType, anonymous ?? true);
@@ -1357,7 +1513,7 @@ F5_drawTriangle();
         concreteImpl.touchedByCpu = true;
       }
       this.bopFunctionConcreteImpls.push(concreteImpl);
-      newFunctionType.functionOf!.concreteImpl = concreteImpl;
+      newFunctionType.functionOf!.overloads[0].concreteImpl = concreteImpl;
       functionBlock.functionOfConcreteImpl = concreteImpl;
 
       this.pushBlockGenerator(lookupInBlock, {
@@ -1432,7 +1588,7 @@ F5_drawTriangle();
     }
   }
 
-  private makeCallBop(node: ts.Node, funcGetter: () => { functionVar: BopVariable, thisVar: BopVariable|undefined }|undefined, args: ArrayLike<ts.Expression|CodeVariable>): BopStage|undefined {
+  private makeCallBop(node: ts.Node, funcGetter: () => { functionVar: BopVariable, thisVar: BopVariable|undefined, functionOf: BopFunctionType }|undefined, args: ArrayLike<ts.Expression|CodeVariable>): BopStage|undefined {
     const argBops: Array<BopStage|CodeVariable> = Array.from(args).map(e => {
       if (e instanceof CodeVariable) {
         return e;
@@ -1448,7 +1604,7 @@ F5_drawTriangle();
         }
 
         const functionRef = inFunc.functionVar;
-        const functionOf: BopFunctionType = inFunc?.functionVar.bopType.functionOf;
+        const functionOf = inFunc.functionOf;
         const thisRef = inFunc.thisVar;
         if (functionOf.isMethod && !thisRef?.result) {
           return;
@@ -1475,7 +1631,7 @@ F5_drawTriangle();
           const ret = this.blockWriter.writeVariableDeclaration(outVar);
           callExprWriter = ret.initializer.writeExpression();
         }
-        const funcCall = callExprWriter.writeStaticFunctionCall(functionRef.result!.identifierToken);
+        const funcCall = callExprWriter.writeStaticFunctionCall(functionRef.result!.identifierToken, { overloadIndex: functionOf.overloadIndex });
         if (functionOf.isMethod) {
           funcCall.addArg().writeVariableReference(thisRef!.result!);
         }
@@ -1651,7 +1807,7 @@ F5_drawTriangle();
   private readonly internalGenericTypeMap = new Map<string, (typeParameters: BopFields) => BopType>();
   private readonly resolvingSet = new Map<ts.Type, void>();
 
-  resolveType(type: ts.Type, options?: { inBlock?: BopBlock, willCoerceTo?: CoersionRef, willCoerceFieldsTo?: Map<string, CoersionRef> }): BopType {
+  resolveType(type: ts.Type, options?: { inBlock?: BopBlock, willCoerceTo?: CoersionRef, willCoerceFieldsTo?: Map<string, CoersionRef>, allowWouldBeAny?: boolean }): BopType {
     const thisBlock = options?.inBlock ?? this.block;
 
     const isObject = (type.flags & ts.TypeFlags.Object) === ts.TypeFlags.Object;
@@ -1703,7 +1859,7 @@ F5_drawTriangle();
 
     // Create a new type.
     if (!this.check((type.flags & ts.TypeFlags.Any) !== ts.TypeFlags.Any, `Type ${utils.stringEmptyToNull(shortName) ?? 'any'} is disallowed.`)) {
-      return this.errorType;
+      return options?.allowWouldBeAny ? this.wouldBeAnyType : this.errorType;
     }
     if (!this.check(!this.resolvingSet.has(type), `Type ${shortName} is recursive.`)) {
       return this.errorType;
@@ -1937,11 +2093,12 @@ F5_drawTriangle();
             debugName: `${shortName}.constructor`,
             innerScope: innerScope.createChildScope(CodeScopeType.Local),
             innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
-            functionOf: new BopFunctionType(
+            functionOf: new BopFunctionOf([new BopFunctionType(
               [],
               newType,
               /* isMethod */ false,
-            ),
+              0,
+            )]),
           });
           existingTypeInfo.defaultConstructor = { fieldVar: constructorIdentifier, fieldType: constructorFuncType };
 
@@ -2070,6 +2227,29 @@ F5_drawTriangle();
     // console.log(resolvedType);
 
     node.getChildren().forEach(this.printRec.bind(this));
+  };
+
+  filterWouldBeAny(type: BopType) {
+    if (type === this.wouldBeAnyType) {
+      return undefined;
+    }
+    return type;
+  }
+
+  private makeCustomOperatorType(rawType: BopType|undefined, auxType: BopAuxTypeInference|undefined): BopType|undefined {
+    if (rawType && rawType !== this.intType && rawType !== this.floatType) {
+      return rawType;
+    }
+    if (auxType) {
+      const numberType = auxType.numberType;
+      if (numberType === BopInferredNumberType.Int) {
+        return this.intType;
+      } else if (numberType === BopInferredNumberType.Float) {
+        return this.floatType;
+      }
+      return auxType.bopType;
+    }
+    return rawType;
   };
 }
 

@@ -15,34 +15,62 @@ interface float3 {}
 interface float4 {}
 
 interface Vector2Constructor<TVector, TElement> {
-  // new (): TVector;
-  // new (value: TElement): TVector;
+  new (): TVector;
+  new (value: TElement): TVector;
   new (x: TElement, y: TElement): TVector;
   // new (xy: Swizzlable2<TElement>): TVector;
   readonly zero: TVector;
   readonly one: TVector;
+
+  static operatorAdd(lhs: TVector, rhs: TVector): TVector;
+  static operatorAdd(lhs: TElement, rhs: TVector): TVector;
+  static operatorAdd(lhs: TVector, rhs: TElement): TVector;
+  static operatorSubtract(lhs: TVector, rhs: TVector): TVector;
+  static operatorSubtract(lhs: TElement, rhs: TVector): TVector;
+  static operatorSubtract(lhs: TVector, rhs: TElement): TVector;
+  static operatorMultiply(lhs: TVector, rhs: TVector): TVector;
+  static operatorMultiply(lhs: TElement, rhs: TVector): TVector;
+  static operatorMultiply(lhs: TVector, rhs: TElement): TVector;
+  static operatorDivide(lhs: TVector, rhs: TVector): TVector;
+  static operatorDivide(lhs: TElement, rhs: TVector): TVector;
+  static operatorDivide(lhs: TVector, rhs: TElement): TVector;
+  static operatorNegate(lhs: TVector): TVector;
 }
 declare var boolean2: Vector2Constructor<boolean2, boolean>;
 declare var int2: Vector2Constructor<int2, int>;
 declare var float2: Vector2Constructor<float2, float>;
 
 interface Vector3Constructor<TVector, TElement> {
-  // new (): TVector;
-  // new (value: TElement): TVector;
+  new (): TVector;
+  new (value: TElement): TVector;
   new (x: TElement, y: TElement, z: TElement): TVector;
   // new (x: TElement, yz: Swizzlable2<TElement>): TVector;
   // new (xy: Swizzlable2<TElement>, z: TElement): TVector;
   // new (xyz: Swizzlable3<TElement>): TVector;
   readonly zero: TVector;
   readonly one: TVector;
+
+  static operatorAdd(lhs: TVector, rhs: TVector): TVector;
+  static operatorAdd(lhs: TElement, rhs: TVector): TVector;
+  static operatorAdd(lhs: TVector, rhs: TElement): TVector;
+  static operatorSubtract(lhs: TVector, rhs: TVector): TVector;
+  static operatorSubtract(lhs: TElement, rhs: TVector): TVector;
+  static operatorSubtract(lhs: TVector, rhs: TElement): TVector;
+  static operatorMultiply(lhs: TVector, rhs: TVector): TVector;
+  static operatorMultiply(lhs: TElement, rhs: TVector): TVector;
+  static operatorMultiply(lhs: TVector, rhs: TElement): TVector;
+  static operatorDivide(lhs: TVector, rhs: TVector): TVector;
+  static operatorDivide(lhs: TElement, rhs: TVector): TVector;
+  static operatorDivide(lhs: TVector, rhs: TElement): TVector;
+  static operatorNegate(lhs: TVector): TVector;
 }
 declare var boolean3: Vector3Constructor<boolean3, boolean>;
 declare var int3: Vector3Constructor<int3, int>;
 declare var float3: Vector3Constructor<float3, float>;
 
 interface Vector4Constructor<TVector, TElement> {
-  // new (): TVector;
-  // new (value: TElement): TVector;
+  new (): TVector;
+  new (value: TElement): TVector;
   new (x: TElement, y: TElement, z: TElement, w: TElement): TVector;
   // new (x: TElement, y: TElement, zw: Swizzlable2<TElement>): TVector;
   // new (x: TElement, yz: Swizzlable2<TElement>, w: TElement): TVector;
@@ -54,6 +82,20 @@ interface Vector4Constructor<TVector, TElement> {
 
   readonly zero: TVector;
   readonly one: TVector;
+
+  static operatorAdd(lhs: TVector, rhs: TVector): TVector;
+  static operatorAdd(lhs: TElement, rhs: TVector): TVector;
+  static operatorAdd(lhs: TVector, rhs: TElement): TVector;
+  static operatorSubtract(lhs: TVector, rhs: TVector): TVector;
+  static operatorSubtract(lhs: TElement, rhs: TVector): TVector;
+  static operatorSubtract(lhs: TVector, rhs: TElement): TVector;
+  static operatorMultiply(lhs: TVector, rhs: TVector): TVector;
+  static operatorMultiply(lhs: TElement, rhs: TVector): TVector;
+  static operatorMultiply(lhs: TVector, rhs: TElement): TVector;
+  static operatorDivide(lhs: TVector, rhs: TVector): TVector;
+  static operatorDivide(lhs: TElement, rhs: TVector): TVector;
+  static operatorDivide(lhs: TVector, rhs: TElement): TVector;
+  static operatorNegate(lhs: TVector): TVector;
 }
 declare var boolean4: Vector4Constructor<boolean4, boolean>;
 declare var int4: Vector4Constructor<int4, int>;

@@ -17,7 +17,10 @@ const BopLib = {
   },
   float4: {
     get fields() { return BopFloat4.fields; },
-    constructor(x: number, y: number, z: number, w: number): BopFloat4 {
+    constructor(x?: number, y?: number, z?: number, w?: number): BopFloat4 {
+      if (x !== undefined && y === undefined) {
+        return new BopFloat4(x, x, x, x);
+      }
       return new BopFloat4(x ?? 0.0, y ?? 0.0, z ?? 0.0, w ?? 0.0);
     },
     get_x(self: BopFloat4) { return self.x; },
@@ -28,6 +31,58 @@ const BopLib = {
     set_y(self: BopFloat4, v: number) { self.y = v; },
     set_z(self: BopFloat4, v: number) { self.z = v; },
     set_w(self: BopFloat4, v: number) { self.w = v; },
+
+    operatorAdd(lhs: BopFloat4|number, rhs: BopFloat4|number) {
+      if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+        if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+          return this.constructor(lhs + rhs.x, lhs + rhs.y, lhs + rhs.z, lhs + rhs.w);
+        } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+          return this.constructor(lhs.x + rhs, lhs.y + rhs, lhs.z + rhs, lhs.w + rhs);
+        } else {
+          throw new Error();
+        }
+      }
+      return this.constructor(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z, lhs.w + rhs.w);
+    },
+    operatorSubtract(lhs: BopFloat4|number, rhs: BopFloat4|number) {
+      if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+        if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+          return this.constructor(lhs - rhs.x, lhs - rhs.y, lhs - rhs.z, lhs - rhs.w);
+        } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+          return this.constructor(lhs.x - rhs, lhs.y - rhs, lhs.z - rhs, lhs.w - rhs);
+        } else {
+          throw new Error();
+        }
+      }
+      return this.constructor(lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z, lhs.w - rhs.w);
+    },
+    operatorMultiply(lhs: BopFloat4|number, rhs: BopFloat4|number) {
+      if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+        if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+          return this.constructor(lhs * rhs.x, lhs * rhs.y, lhs * rhs.z, lhs * rhs.w);
+        } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+          return this.constructor(lhs.x * rhs, lhs.y * rhs, lhs.z * rhs, lhs.w * rhs);
+        } else {
+          throw new Error();
+        }
+      }
+      return this.constructor(lhs.x * rhs.x, lhs.y * rhs.y, lhs.z * rhs.z, lhs.w * rhs.w);
+    },
+    operatorDivide(lhs: BopFloat4|number, rhs: BopFloat4|number) {
+      if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+        if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+          return this.constructor(lhs / rhs.x, lhs / rhs.y, lhs / rhs.z, lhs / rhs.w);
+        } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+          return this.constructor(lhs.x / rhs, lhs.y / rhs, lhs.z / rhs, lhs.w / rhs);
+        } else {
+          throw new Error();
+        }
+      }
+      return this.constructor(lhs.x / rhs.x, lhs.y / rhs.y, lhs.z / rhs.z, lhs.w / rhs.w);
+    },
+    operatorNegate(lhs: BopFloat4) {
+      return this.constructor(-lhs.x, -lhs.y, -lhs.z, -lhs.w);
+    },
   },
   Array: {
     persistent<T>(elementType: BopClass|undefined, l: number): BopArray<T> {
@@ -52,21 +107,54 @@ class BopFloat4 {
   ) {}
 }
 
-class BopArray<T> {
+class BopArrayImpl<T> {
   readonly buffer: T[];
   length: number = 0;
 
+  private cpuDirty = false;
+  private gpuDirty = false;
+  private gpuBuffer?: GPUBuffer;
+
   constructor(readonly elementType: BopClass|undefined, readonly capacity: number) {
-    const value: T = new (elementType as any)();
+    // const value: T = new (elementType as any)();
     this.buffer = new Array<T>(capacity);
+  }
+
+  at(i: number) {
+    return this.buffer[i];
+  }
+  set(i: number, value: T) {
+    this.buffer[i] = value;
+    this.markCpuDirty();
+  }
+  push(v: T) {
+    this.buffer[this.length++] = v;
+    this.markCpuDirty();
+  }
+
+  markCpuDirty() {
+    this.cpuDirty = true;
+  }
+  markGpuDirty() {
+    this.gpuDirty = true;
+  }
+  ensureGpu() {
+    // if (!this.gpuDirty && this.gpuBuffer?.size === ) {
+    // }
+  }
+}
+
+class BopArray<T> {
+  constructor(readonly elementType: BopClass|undefined, readonly capacity: number) {
+    const impl = new BopArrayImpl<T>(elementType, capacity);
 
     return new Proxy(this, {
       set(target, p, newValue, receiver) {
-        const rawValue = Reflect.get(target, p, receiver);
+        const rawValue = Reflect.get(impl, p, receiver);
         if (typeof(p) !== 'string' || rawValue !== undefined) {
-          return Reflect.set(target, p, newValue, receiver);
+          return Reflect.set(impl, p, newValue, receiver);
         }
-        target.buffer[parseInt(p)] = newValue;
+        impl.set(parseInt(p), newValue);
         return true;
       },
       get(target, p, receiver) {
@@ -74,17 +162,15 @@ class BopArray<T> {
         if (typeof(p) !== 'string' || rawValue !== undefined) {
           return rawValue;
         }
-        return target.buffer[parseInt(p)];
+        if (p === 'getImpl') {
+          return impl;
+        }
+        return impl.at(parseInt(p));
       },
     });
   }
 
-  at(i: number) {
-    return this.buffer[i];
-  }
-  push(v: T) {
-    this.buffer[this.length++] = v;
-  }
+  getImpl(): BopArrayImpl<T> { throw new Error('never'); }
 
   static push<T>(a: Array<T>, v: T) { a.push(v); }
   static get_length<T>(a: Array<T>) { return a.length; }
@@ -397,6 +483,94 @@ function MTLNewRenderPipelineStateWithDescriptor(descriptor: MTLRenderPipelineDe
   };
 }
 
+
+
+
+
+
+
+class MTLComputePipelineDescriptor {
+  label = 'Unknown Pipeline';
+  computeFunction = InvalidMTLFunction();
+
+  readonly ready;
+  private compileFlag = new utils.Resolvable();
+
+  constructor(label?: string) {
+    this.label = label ?? this.label;
+    this.ready = (async (): Promise<{ pipeline?: GPUComputePipeline }> => {
+      await this.compileFlag.promise;
+      const internals = SharedMTLInternals();
+      const { device } = await internals.ready;
+      const { shaderModule } = await internals.shadersReady;
+      if (!device || !shaderModule) {
+        return { pipeline: undefined };
+      }
+
+      await this.computeFunction.ready;
+
+      const vertexBuffers: GPUVertexBufferLayout[] = [
+        {
+          attributes: [
+            {
+              shaderLocation: 0, // position
+              offset: 0,
+              format: 'float32x4',
+            },
+            {
+              shaderLocation: 1, // color
+              offset: 16,
+              format: 'float32x4',
+            },
+          ],
+          arrayStride: 32,
+          stepMode: 'vertex',
+        },
+      ];
+      const pipelineDescriptor: GPUComputePipelineDescriptor = {
+        compute: {
+          module: shaderModule,
+          entryPoint: this.computeFunction.functionName,
+        },
+        layout: 'auto',
+      };
+      const pipeline = await device.createComputePipelineAsync(pipelineDescriptor);
+      return { pipeline: pipeline };
+    })();
+  }
+
+  compile() { this.compileFlag.resolve(undefined); }
+}
+
+const InvalidMTLComputePipelineDescriptor = utils.lazy(() => new MTLComputePipelineDescriptor('InvalidMTLComputePipelineDescriptor'));
+
+function MakeMTLComputePipelineDescriptor(): MTLComputePipelineDescriptor {
+  return new MTLComputePipelineDescriptor('Unknown Pipeline');
+}
+
+
+interface MTLComputePipelineState {
+  descriptor: MTLComputePipelineDescriptor;
+}
+
+const InvalidMTLComputePipelineState = utils.lazy(() => utils.upcast<MTLComputePipelineState>({
+  descriptor: InvalidMTLComputePipelineDescriptor(),
+}));
+
+function MTLNewComputePipelineStateWithDescriptor(descriptor: MTLComputePipelineDescriptor): MTLComputePipelineState {
+  return {
+    descriptor: descriptor,
+  };
+}
+
+
+
+
+
+
+
+
+
 interface MTLTexture {
 }
 
@@ -472,6 +646,50 @@ class MTLRenderCommandEncoder {
         return;
       }
       await runner(encoder, commandEncoder, device, renderPipeline);
+    });
+  }
+}
+
+class MTLComputeCommandEncoder {
+  label = 'Unknown Encoder';
+  pipelineState = InvalidMTLComputePipelineState();
+
+  dataBytes: Array<ArrayBuffer|undefined> = [];
+
+  readonly ready;
+  private readonly queue = new utils.OperationQueue();
+  private readonly compileFlag = new utils.Resolvable();
+
+  constructor() {
+    this.ready = (async () => {
+      const internals = SharedMTLInternals();
+      await this.compileFlag.promise;
+      const { device } = await internals.ready;
+      this.pipelineState.descriptor.compile();
+      const { pipeline } = await this.pipelineState.descriptor.ready;
+      const commandEncoder = device?.createCommandEncoder();
+
+      const encoder = commandEncoder?.beginComputePass();
+      if (pipeline) {
+        encoder?.setPipeline(pipeline);
+      }
+      return { device, commandEncoder, encoder, pipeline };
+    })();
+    this.queue.push(() => this.ready);
+  }
+
+  setBytes(buffer: ArrayBuffer, index: number) {
+    this.dataBytes[index] = buffer;
+  }
+
+  queueTask(runner: (encoder: GPUComputePassEncoder, commandEncoder: GPUCommandEncoder, device: GPUDevice, pipeline: GPUComputePipeline) => Promise<unknown>) {
+    this.compileFlag.resolve(undefined);
+    this.queue.push(async () => {
+      const { device, commandEncoder, encoder, pipeline } = await this.ready;
+      if (!device || !encoder || !commandEncoder || !pipeline) {
+        return;
+      }
+      await runner(encoder, commandEncoder, device, pipeline);
     });
   }
 }
@@ -602,9 +820,6 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
   console.log('EncodeDrawPrimitives', encoder, type, offset, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
-    const vertexBindGroupEntries: GPUBindGroupEntry[] = [];
-    const fragmentBindGroupEntries: GPUBindGroupEntry[] = [];
-
     const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|undefined>) => {
       const bindGroupEntries: GPUBindGroupEntry[] = [];
       for (let index = 0; index < buffers.length; ++index) {
@@ -650,6 +865,48 @@ function EncoderEndEncoding(encoder: MTLRenderCommandEncoder) {
 
 
 
+function MakeMTLComputeCommandEncoder(): MTLComputeCommandEncoder {
+  return new MTLComputeCommandEncoder();
+}
+function EncoderSetComputeBytes(encoder: MTLComputeCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
+  console.log('EncoderSetComputeBytes', encoder, buffer, offset, index);
+  encoder.setBytes(buffer, index);
+}
+function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: number) {
+  console.log('EncoderDispatchWorkgroups', encoder, count);
+  const proxyEncoder = encoder;
+  encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
+    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|undefined>) => {
+      const bindGroupEntries: GPUBindGroupEntry[] = [];
+      for (let index = 0; index < buffers.length; ++index) {
+        const byteArray = buffers[index];
+        if (!byteArray) {
+          continue;
+        }
+        const bufferBuffer = device.createBuffer({
+          size: byteArray.byteLength,
+          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
+        });
+        device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
+
+        const bindGroupEntry: GPUBindGroupEntry = {
+          binding: index,
+          resource: {
+            buffer: bufferBuffer,
+          }
+        };
+        bindGroupEntries.push(bindGroupEntry);
+      }
+      return bindGroupEntries;
+    };
+    const dataBindGroup = device.createBindGroup({
+      layout: renderPipeline.getBindGroupLayout(0),
+      entries: marshalBindGroupEntries(proxyEncoder.dataBytes),
+    });
+    encoder.setBindGroup(0, dataBindGroup);
+    encoder.dispatchWorkgroups(count);
+  });
+}
 
 
 

@@ -28,6 +28,7 @@ export enum BopInferredNumberType {
 
 export interface BopAuxTypeInference {
   numberType?: BopInferredNumberType;
+  bopType?: BopType;
 }
 
 export interface BopStageDebug {

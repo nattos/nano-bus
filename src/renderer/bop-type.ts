@@ -26,6 +26,10 @@ export class BopFunctionConcreteImplDetail {
   }
 }
 
+export class BopFunctionOf {
+  public constructor(readonly overloads: BopFunctionType[]) {}
+}
+
 export class BopFunctionType {
   public concreteImpl?: BopFunctionConcreteImplDetail;
 
@@ -33,6 +37,7 @@ export class BopFunctionType {
     public readonly args: BopFields,
     public readonly returnType: BopType,
     public readonly isMethod: boolean,
+    public readonly overloadIndex: number,
   ) {}
 }
 
@@ -57,7 +62,7 @@ export class BopType {
     public readonly innerScope: CodeScope,
     public readonly innerBlock: BopBlock,
     public readonly structOf: BopStructType|undefined,
-    public readonly functionOf: BopFunctionType|undefined,
+    public readonly functionOf: BopFunctionOf|undefined,
     public readonly unionOf: BopTypeUnion|undefined,
     public readonly internalTypeOf: BopInternalType|undefined,
   ) {}
@@ -133,7 +138,7 @@ export class BopType {
     debugName: string,
     innerScope: CodeScope,
     innerBlock: BopBlock,
-    functionOf: BopFunctionType,
+    functionOf: BopFunctionOf,
   }): BopType {
     return new BopType(
       options.debugName,
@@ -160,7 +165,7 @@ export interface BopInternalTypeBuilder {
   declareMethod(identifier: string, params: BopFields, returnType: BopType): CodeFunctionWriter;
   declareInternalField(identifier: string, type: BopType): void;
   declareInternalConstructor(params: BopFields, internalIdentifier: string): void;
-  declareInternalMethod(identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType): void;
+  declareInternalMethod(identifier: string, internalIdentifier: string, params: BopFields, returnType: BopType, options: { isMethod: boolean }): void;
   declareGenericMethod(identifier: string, genericFunc: BopGenericFunction): void;
   declareInternalProperty(identifier: string, type: BopType): BopVariable;
 }

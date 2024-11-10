@@ -1,7 +1,7 @@
 import * as utils from '../utils';
 import * as ts from "typescript";
 import { CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
-import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType, BopFunctionConcreteImplDetail } from './bop-type';
+import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType, BopFunctionConcreteImplDetail, BopFunctionOf } from './bop-type';
 import { BopBlock, BopIdentifierPrefix, BopGenericFunction, BopPropertyAccessor, BopVariable } from './bop-data';
 
 export type ResolvedType = { name?: string, bopType?: BopType, typeArgs: ResolvedType[] };
@@ -222,13 +222,14 @@ export function loadBopLib(host: {
           const returnType = makeMethodTypeResolver(member.type);
 
           const propName = isConstructor ? 'constructor' : member.name.getText();
+          const isStatic = (ts.getCombinedModifierFlags(member) & ts.ModifierFlags.Static) !== 0;
           type.methods.push({
             name: propName,
             typeParameters: methodTypeParameters,
             parameters: parameters,
             returnType: returnType,
             isConstructor: isConstructor,
-            isStatic: false,
+            isStatic: isStatic,
           });
         } else if (ts.isPropertySignature(member)) {
           // TODO: Handle static properties.
@@ -298,6 +299,7 @@ export function loadBopLib(host: {
       };
 
       for (const method of fromType.methods) {
+        console.log(method);
         intoType.methods.push({
           name: method.name,
           typeParameters: method.typeParameters,
@@ -358,14 +360,14 @@ export function loadBopLib(host: {
     const instantiateIntoType = (instantiatedTypeName: string, newType: BopInternalTypeBuilder, typeArgs: ResolvedType[], staticOnly: boolean): BopType => {
       const instantiatedType = newType.type;
       for (const method of type.methods) {
-        if (staticOnly) {
-          if (method.isConstructor || !method.isStatic) {
-            continue;
-          }
+        const isStaticLike = !method.isConstructor && method.isStatic;
+        if (staticOnly !== isStaticLike) {
+          continue;
         }
         const methodName = method.name;
         const debugMethodName = `${instantiatedTypeName}::${methodName}`;
 
+        console.log(debugMethodName);
         if (method.typeParameters.length === 0 || method.isConstructor) {
           const methodTypeArgs: ResolvedType[] = [];
           const params: BopFields = method.parameters.map(p => {
@@ -381,7 +383,7 @@ export function loadBopLib(host: {
           if (method.isConstructor) {
             newType.declareInternalConstructor(params, debugMethodName);
           } else {
-            newType.declareInternalMethod(method.name, debugMethodName, params, returnType);
+            newType.declareInternalMethod(method.name, debugMethodName, params, returnType, { isMethod: !method.isStatic });
           }
         } else {
           const genericFunc = new BopGenericFunction((typeParameters: BopFields) => {
@@ -404,17 +406,18 @@ export function loadBopLib(host: {
               debugName: debugInstantiatedMethodName,
               innerScope: host.writer.global.scope.createChildScope(CodeScopeType.Local),
               innerBlock: host.globalBlock.createChildBlock(CodeScopeType.Local),
-              functionOf: new BopFunctionType(
+              functionOf: new BopFunctionOf([new BopFunctionType(
                 paramDecls,
                 returnType,
                 isMethod,
-              ),
+                0,
+              )]),
             });
 
             const concreteFunctionVar = host.globalBlock.mapTempIdentifier(debugInstantiatedMethodName, newFunctionType, /* anonymous */ true);
             const concreteFunctionIdentifier = host.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, debugInstantiatedMethodName);
             const concreteImpl = new BopFunctionConcreteImplDetail(concreteFunctionVar);
-            newFunctionType.functionOf!.concreteImpl = concreteImpl;
+            newFunctionType.functionOf!.overloads[0].concreteImpl = concreteImpl;
             host.bopFunctionConcreteImpls.push(concreteImpl);
             concreteFunctionVar.result = concreteFunctionIdentifier;
 
@@ -475,34 +478,36 @@ export function loadBopLib(host: {
           debugName: getterName,
           innerScope: newType.type.innerScope.createChildScope(CodeScopeType.Local),
           innerBlock: newType.type.innerBlock.createChildBlock(CodeScopeType.Local),
-          functionOf: new BopFunctionType(
+          functionOf: new BopFunctionOf([new BopFunctionType(
             [],
             propType,
             /* isMethod */ true,
-          ),
+            0,
+          )]),
         });
         const getterBopVar = newType.type.innerBlock.mapIdentifier(getterType.debugName, getterType.tempType, getterType, /* anonymous */ true);
         const getterVar = newType.type.innerScope.createVariableInScope(getterBopVar.type, getterBopVar.nameHint);
         getterBopVar.result = getterVar;
-        getterType.functionOf!.concreteImpl = new BopFunctionConcreteImplDetail(getterBopVar);
-        host.bopFunctionConcreteImpls.push(getterType.functionOf!.concreteImpl);
+        getterType.functionOf!.overloads[0].concreteImpl = new BopFunctionConcreteImplDetail(getterBopVar);
+        host.bopFunctionConcreteImpls.push(getterType.functionOf!.overloads[0].concreteImpl);
         host.writer.mapInternalToken(getterVar.identifierToken, getterName);
 
         const setterType = BopType.createFunctionType({
           debugName: setterName,
           innerScope: newType.type.innerScope.createChildScope(CodeScopeType.Local),
           innerBlock: newType.type.innerBlock.createChildBlock(CodeScopeType.Local),
-          functionOf: new BopFunctionType(
+          functionOf: new BopFunctionOf([new BopFunctionType(
             [{ identifier: 'value', type: propType }],
             host.voidType,
             /* isMethod */ true,
-          ),
+            0,
+          )]),
         });
         const setterBopVar = newType.type.innerBlock.mapIdentifier(setterType.debugName, setterType.tempType, setterType, /* anonymous */ true);
         const setterVar = newType.type.innerScope.createVariableInScope(setterBopVar.type, setterBopVar.nameHint);
         setterBopVar.result = setterVar;
-        setterType.functionOf!.concreteImpl = new BopFunctionConcreteImplDetail(setterBopVar);
-        host.bopFunctionConcreteImpls.push(setterType.functionOf!.concreteImpl);
+        setterType.functionOf!.overloads[0].concreteImpl = new BopFunctionConcreteImplDetail(setterBopVar);
+        host.bopFunctionConcreteImpls.push(setterType.functionOf!.overloads[0].concreteImpl);
         host.writer.mapInternalToken(setterVar.identifierToken, setterName);
 
         propVar.propertyResult = new BopPropertyAccessor(getterBopVar, setterBopVar, { directAccessIdentifier: propertyIdentifierToken });

@@ -91,11 +91,33 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
     return { bindings: [] };
   }
 
-  const collectedCopyFields: Array<{ type: 'int'|'float', path: { identifier: CodeNamedToken, bopType: BopType }[], marshalStructField?: CodeVariable }> = [];
-  const collectedArrays: Array<{ elementBinding: GpuFixedBinding, userType: BopType, path: { identifier: CodeNamedToken, bopType: BopType }[] }> = [];
+  interface PathPart {
+    identifier: CodeNamedToken;
+    bopType: BopType;
+  }
+  interface CopyField {
+    type: 'int'|'float';
+    path: PathPart[];
+    marshalStructField?: CodeVariable;
+    forBindArray?: {
+      entry: BindArray;
+      field: keyof BindArray['marshalStructFields'];
+    },
+  }
+  interface BindArray {
+    elementBinding: GpuFixedBinding;
+    userType: BopType;
+    path: PathPart[];
+    marshalStructFields: {
+      length?: CodeVariable;
+    };
+  }
+
+  const collectedCopyFields: Array<CopyField> = [];
+  const collectedArrays: Array<BindArray> = [];
 
   if (bopType.structOf) {
-    const visitRec = (subpath: { identifier: CodeNamedToken, bopType: BopType }[], fields: BopVariable[]) => {
+    const visitRec = (subpath: PathPart[], fields: BopVariable[]) => {
       for (const field of fields) {
         const fieldIdentifier = field.propertyResult?.internal?.directAccessIdentifier ?? field.result?.identifierToken;
         if (!fieldIdentifier) {
@@ -122,10 +144,20 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
             this.logAssert(`Cannot bind array of type ${arrayOfType.debugName} as it is not blittable.`);
             continue;
           }
-          collectedArrays.push({
+          const bindArray: BindArray = {
             path: fieldSubpath,
             userType: arrayOfType,
             elementBinding: elementBinding,
+            marshalStructFields: {},
+          };
+          collectedArrays.push(bindArray);
+          collectedCopyFields.push({
+            path: fieldSubpath.concat({ identifier: this.writer.makeInternalToken('length'), bopType: this.intType }),
+            type: 'int',
+            forBindArray: {
+              entry: bindArray,
+              field: 'length',
+            },
           });
         } else if (field.bopType.structOf) {
           if (!pushVisitType(field.bopType)) {
@@ -214,6 +246,10 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
                 .initializer.writeExpression().writePropertyAccess(field.marshalStructField!.identifierToken)
                 .source.writeVariableReference(dataVar);
             leafVar.result = proxyVar;
+
+            if (field.forBindArray) {
+              field.forBindArray.entry.marshalStructFields.length = proxyVar;
+            }
           }
         }
         intoBopVar.requiresDirectAccess = true;
@@ -295,6 +331,19 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
           // Arrays must be accessed directly, because WSGL doesn't have a way to create aliases currently.
           leafVar.requiresDirectAccess = true;
           leafVar.result = dataVar;
+
+          {
+            const propName = 'length';
+            const propType = self.intType;
+            const propCopy = binding.marshalStructFields[propName];
+            if (self.verifyNotNulllike(propCopy, `${propName} was not bound correctly.`)) {
+              const proxyVar = body.scope.allocateVariableIdentifier(propType.tempType, BopIdentifierPrefix.Local, binding.path.map(f => f.identifier.nameHint).concat(propName).join('_'));
+              body.writeVariableDeclaration(proxyVar).initializer.writeExpression().writeVariableReference(propCopy);
+              const lengthProp = leafVar.lookupBlockOverride!.mapIdentifier(propName, propType.tempType, propType, false);
+              lengthProp.requiresDirectAccess = true;
+              lengthProp.result = proxyVar;
+            }
+          }
         }
         intoBopVar.requiresDirectAccess = true;
         intoBopVar.lookupBlockOverride = rootBlock;
@@ -325,16 +374,21 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
   const paramDecls: BopFields = [];
   const params: { var: BopVariable, attribs?: CodeAttributeDecl[] }[] = [];
   // TODO: HAXXORZZZ !!!!!
+  const isGpuComputeFunc = funcName.includes('computeShader');
   const isGpuVertexFunc = funcName.includes('vertexShader');
   const isGpuFragmentFunc = funcName.includes('fragmentShader');
-  const isGpuBoundFunc = isGpuFragmentFunc || isGpuVertexFunc;
+  const isGpuBoundFunc = isGpuComputeFunc || isGpuFragmentFunc || isGpuVertexFunc;
   if (!isGpuBoundFunc) {
     return false;
   }
-  const stage = isGpuVertexFunc ? 'Vertex' : 'Fragment';
+  const stage = isGpuComputeFunc ? 'Compute' : isGpuVertexFunc ? 'Vertex' : 'Fragment';
 
   const rewriterFuncs: FuncMutatorFunc[] = [];
   rewriterFuncs.push(funcWriter => {
+    if (isGpuComputeFunc) {
+      funcWriter.addAttribute({ key: CodeAttributeKey.GpuFunctionCompute });
+      funcWriter.addAttribute({ key: CodeAttributeKey.GpuWorkgroupSize, intValue: 64 });
+    }
     if (isGpuVertexFunc) {
       funcWriter.addAttribute({ key: CodeAttributeKey.GpuFunctionVertex });
     }
@@ -344,8 +398,13 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
     }
   });
 
+  const needsReturnValue = !isGpuComputeFunc;
+  const hasCustomReturnType = !!userReturnType.structOf?.fields;
+  const hasReturnValue = userReturnType?.internalTypeOf || hasCustomReturnType;
   let returnType;
-  if (!userReturnType?.internalTypeOf && this.verifyNotNulllike(userReturnType.structOf?.fields, `${isGpuVertexFunc} output is not concrete.`)) {
+  if (needsReturnValue && !hasReturnValue) {
+    this.logAssert(`${isGpuVertexFunc} output is not concrete.`);
+  } else if (hasCustomReturnType) {
     const vertexOutStructIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${funcName}_${stage}Out`);
     const vertexOutStructWriter = this.writer.global.writeStruct(vertexOutStructIdentifier);
     const vertexOutStructScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
@@ -420,6 +479,10 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
 
 
 
+  const vertexParamIndex = isGpuComputeFunc ? -1 : 0;
+  const threadIdParamIndex = isGpuComputeFunc ? 0 : 1;
+  const optionsParamIndex = isGpuComputeFunc ? 1 : 2;
+  const bindingLocation = isGpuVertexFunc ? CodeAttributeKey.GpuVertexBindingLocation : isGpuFragmentFunc ? CodeAttributeKey.GpuFragmentBindingLocation : CodeAttributeKey.GpuComputeBindingLocation;
 
   let paramIndex = 0;
   let optionsGpuBindings: GpuBindings|undefined;
@@ -427,7 +490,7 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
     const paramType = this.resolveType(param.type, { inBlock: functionBlock });
     paramDecls.push({ type: paramType, identifier: param.identifier });
 
-    if (paramIndex === 0) {
+    if (paramIndex === vertexParamIndex) {
       if (!this.verifyNotNulllike(paramType.structOf?.fields, `${isGpuVertexFunc} is not concrete.`)) {
         continue;
       }
@@ -461,11 +524,11 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
         });
         fieldIndex++;
       }
-    } else if (paramIndex === 1) {
+    } else if (paramIndex === threadIdParamIndex) {
       // TODO: Fix uint.
       // const argVar = functionBlock.mapTempIdentifier(param.identifier, this.uintType);
       // params.push({ var: argVar, attribs: [ { key: CodeAttributeKey.GpuBindVertexIndex } ] });
-    } else if (paramIndex === 2) {
+    } else if (paramIndex === optionsParamIndex) {
       optionsGpuBindings = makeGpuBindings.bind(this)(this.resolveType(param.type, { inBlock: functionBlock }));
       const argVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
       argVar.requiresDirectAccess = true;
@@ -479,7 +542,6 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
           });
 
           const varWriter = this.writer.global.writeVariableDeclaration(uniformVar);
-          const bindingLocation = isGpuVertexFunc ? CodeAttributeKey.GpuVertexBindingLocation : CodeAttributeKey.GpuFragmentBindingLocation;
           varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
           varWriter.attribs.push({ key: CodeAttributeKey.GpuVarUniform });
 
@@ -497,7 +559,6 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
           });
 
           const varWriter = this.writer.global.writeVariableDeclaration(uniformVar);
-          const bindingLocation = isGpuVertexFunc ? CodeAttributeKey.GpuVertexBindingLocation : CodeAttributeKey.GpuFragmentBindingLocation;
           varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
           varWriter.attribs.push({ key: CodeAttributeKey.GpuVarReadWriteArray });
 
@@ -541,20 +602,469 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
 export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): BopStage|undefined {
   // Hacky special cases!!! These are necessary for now since specialized
   // generics handling, like vararg expansions are not supported.
-  const isOurs =
+  const isRenderElements =
       ts.isCallExpression(node.expression) &&
       ts.isCallExpression(node.expression.expression) &&
       ts.isPropertyAccessExpression(node.expression.expression.expression) &&
       ts.isIdentifier(node.expression.expression.expression.expression) &&
       this.tc.getTypeAtLocation(node.expression.expression.expression.expression)?.symbol?.name === 'GpuStatic' &&
       node.expression.expression.expression.name.text === 'renderElements';
-  if (!isOurs) {
+  if (isRenderElements) {
+    return bopRenderElementsCall.bind(this)(node, node.expression, node.expression.expression);
+  }
+  const isCompute =
+      ts.isCallExpression(node.expression) &&
+      ts.isPropertyAccessExpression(node.expression.expression) &&
+      ts.isIdentifier(node.expression.expression.expression) &&
+      this.tc.getTypeAtLocation(node.expression.expression.expression)?.symbol?.name === 'GpuStatic' &&
+      node.expression.expression.name.text === 'compute';
+  if (isCompute) {
+    return bopComputeCall.bind(this)(node, node.expression);
+  }
+}
+
+
+
+
+
+export function bopComputeCall(this: BopProcessor, shaderCallNode: ts.CallExpression, computeCallNode: ts.CallExpression): BopStage|undefined {
+  const fragmentCallNode = shaderCallNode;
+  const vertexCallNode = shaderCallNode;
+  const renderElementsCallNode = computeCallNode;
+  const fragmentFunctionSignature = this.tc.getResolvedSignature(fragmentCallNode, [], fragmentCallNode.arguments.length);
+  const vertexFunctionSignature = this.tc.getResolvedSignature(vertexCallNode, [], vertexCallNode.arguments.length);
+  const renderElementsFunctionSignature = this.tc.getResolvedSignature(renderElementsCallNode, [], renderElementsCallNode.arguments.length);
+  if (!this.verifyNotNulllike(renderElementsFunctionSignature, `Gpu.renderElements function has unresolved signature.`) ||
+      !this.verifyNotNulllike(vertexFunctionSignature, `Vertex function has unresolved signature.`) ||
+      !this.verifyNotNulllike(fragmentFunctionSignature, `Fragment function has unresolved signature.`)) {
     return;
   }
 
-  const fragmentCallNode = node;
-  const vertexCallNode = node.expression;
-  const renderElementsCallNode = node.expression.expression;
+  console.log(this.tc.signatureToString(renderElementsFunctionSignature));
+  console.log(this.tc.signatureToString(vertexFunctionSignature));
+  console.log(this.tc.signatureToString(fragmentFunctionSignature));
+
+  const fragmentArgBops = fragmentCallNode.arguments.map(arg => this.visitChild(arg));
+  const vertexArgBops =  vertexCallNode.arguments.map(arg => this.visitChild(arg));
+
+  const renderElementsArgs = renderElementsCallNode.arguments;
+  if (renderElementsArgs.length !== 2) {
+    this.logAssert(`Call to Gpu.compute takes 2 arguments (${renderElementsArgs.length} provided).`);
+    return;
+  }
+
+  const threadCountBop = this.visitChild(renderElementsArgs[0]);
+  // Prevent temporaries from getting created. We only need the names, not
+  // references, since these will be GPU only.
+  const oldAsAssignableRef = this.asAssignableRef;
+  this.asAssignableRef = true;
+  const computeFunctionBop = this.visitChild(renderElementsArgs[1]);
+  // const fragmentFunctionBop = this.visitChild(renderElementsArgs[2]);
+  this.asAssignableRef = oldAsAssignableRef;
+
+  return {
+    resolveIdentifiers: () => {},
+    produceResult: () => {
+      // Resolve vertex function.
+      // Emit a wrapper GPU vertex function.
+      const vertexFunctionExprResult = this.readFullResult(computeFunctionBop);
+      // const vertexFunctionConcreteImpl = vertexFunctionExprResult?.expressionResult?.bopType.functionOf?.concreteImpl;
+      const vertexFunctionConcreteImpl = this.resolveFunctionOverload(vertexFunctionExprResult?.expressionResult?.bopType, vertexFunctionSignature)?.concreteImpl;
+      // const fragmentFunctionExprResult = this.readFullResult(fragmentFunctionBop);
+      // const fragmentFunctionConcreteImpl = fragmentFunctionExprResult?.expressionResult?.bopType.functionOf?.concreteImpl;
+      // const fragmentFunctionConcreteImpl = this.resolveFunctionOverload(fragmentFunctionExprResult?.expressionResult?.bopType, fragmentFunctionSignature)?.concreteImpl;
+      if (!this.verifyNotNulllike(vertexFunctionConcreteImpl, `Vertex shader is not concrete.`) ||
+          !this.verifyNotNulllike(vertexFunctionConcreteImpl.bopVar.result, `Vertex shader is not complete.`)) {
+          // !this.verifyNotNulllike(fragmentFunctionConcreteImpl, `Fragment shader is not concrete.`) ||
+          // !this.verifyNotNulllike(fragmentFunctionConcreteImpl.bopVar.result, `Fragment shader is not complete.`)) {
+        return;
+      }
+
+      const pipelineName = vertexFunctionConcreteImpl.bopVar.nameHint;
+      // Do _not_ mark references, as they are referenced indirectly.
+      const vertexFuncIdentifier = vertexFunctionConcreteImpl.bopVar.result.identifierToken;
+      vertexFunctionConcreteImpl.touchedByGpu = true;
+      // const fragmentFuncIdentifier = fragmentFunctionConcreteImpl.bopVar.result.identifierToken;
+      // fragmentFunctionConcreteImpl.touchedByGpu = true;
+
+      const pipelineInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLRenderPipelineDescriptor.storageType, BopIdentifierPrefix.Field, `${pipelineName}_pipeline`);
+      this.instanceBlockWriter.body.writeField(pipelineInstanceVar.identifierToken, this.privateTypes.MTLRenderPipelineDescriptor.storageType);
+      const renderPassDescriptorInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLRenderPassDescriptor.storageType, BopIdentifierPrefix.Field, `${pipelineName}_renderPassDescriptor`);
+      this.instanceBlockWriter.body.writeField(renderPassDescriptorInstanceVar.identifierToken, this.privateTypes.MTLRenderPassDescriptor.storageType);
+
+      const vertexFunctionInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLFunction.storageType, BopIdentifierPrefix.Field, `${pipelineName}_vertexShader`);
+      this.instanceBlockWriter.body.writeField(vertexFunctionInstanceVar.identifierToken, this.privateTypes.MTLFunction.storageType);
+      const fragmentFunctionInstanceVar = this.instanceScope.allocateVariableIdentifier(this.privateTypes.MTLFunction.storageType, BopIdentifierPrefix.Field, `${pipelineName}_fragmentShader`);
+      this.instanceBlockWriter.body.writeField(fragmentFunctionInstanceVar.identifierToken, this.privateTypes.MTLFunction.storageType);
+
+      // Resolve fragment function.
+      // Emit a wrapper GPU fragment function.
+
+      // Emit pipeline setup code, and store the pipeline in globals.
+      {
+        const initFuncIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, `${pipelineName}_prepare`);
+        const initFuncBlock = this.globalBlock.createChildBlock(CodeScopeType.Function);
+        const initFuncScope = this.writer.global.scope.createChildScope(CodeScopeType.Function);
+        const initFunc = this.writer.global.writeFunction(initFuncIdentifier.identifierToken);
+        initFunc.touchedByCpu = true;
+        initFunc.returnTypeSpec = this.voidType.tempType;
+        this.prepareFuncs.push(initFuncIdentifier);
+        const blockWriter = initFunc.body;
+
+        const allocTmpOut = (bopType: BopType): CodeVariable => {
+          const outBopVar = initFuncBlock.mapIdentifier('tmp', bopType.tempType, bopType, /* anonymous */ true);
+          const outVar = blockWriter.scope.createVariableInScope(outBopVar.type, pipelineName);
+          outBopVar.result = outVar;
+          return outVar;
+        };
+
+        // id<MTLFunction> vertexFunction = [defaultLibrary newFunctionWithName:@"drawTriangle1_vertexShader"];
+        const vertexFunctionVar = allocTmpOut(this.privateTypes.MTLFunction);
+        const vertexFunction = blockWriter.writeVariableDeclaration(vertexFunctionVar);
+        const vertexFunctionInit = vertexFunction.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MTLLibraryNewFunctionWithName'));
+        vertexFunctionInit.addArg().writeLiteralStringToken(vertexFuncIdentifier, { managed: true });
+
+        // id<MTLFunction> fragmentFunction = [defaultLibrary newFunctionWithName:@"drawTriangle1_fragmentShader"];
+        // const fragmentFunctionVar = allocTmpOut(this.privateTypes.MTLFunction);
+        // const fragmentFunction = blockWriter.writeVariableDeclaration(fragmentFunctionVar);
+        // const fragmentFunctionInit = fragmentFunction.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MTLLibraryNewFunctionWithName'));
+        // fragmentFunctionInit.addArg().writeLiteralStringToken(fragmentFuncIdentifier, { managed: true });
+
+        {
+          const assign = blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(vertexFunctionInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+          assign.value.writeVariableReference(vertexFunctionVar);
+        }
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref.writePropertyAccess(fragmentFunctionInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+        //   assign.value.writeVariableReference(fragmentFunctionVar);
+        // }
+
+        // MTLRenderPipelineDescriptor* pipelineStateDescriptor = [[MTLRenderPipelineDescriptor alloc] init];
+        const pipelineStateDescriptorVar = allocTmpOut(this.privateTypes.MTLComputePipelineDescriptor);
+        const pipelineStateDescriptor = blockWriter.writeVariableDeclaration(pipelineStateDescriptorVar);
+        const pipelineStateDescriptorInit = pipelineStateDescriptor.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MakeMTLComputePipelineDescriptor'));
+
+        // pipelineStateDescriptor.label = @"RenderPrimitives";
+        {
+          const assign = blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(this.writer.makeInternalToken('label')).source.writeVariableReference(pipelineStateDescriptorVar);
+          assign.value.writeLiteralString(pipelineName, { managed: true });
+        }
+        // pipelineStateDescriptor.vertexFunction = vertexFunction;
+        {
+          const assign = blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(this.writer.makeInternalToken('computeFunction')).source.writeVariableReference(pipelineStateDescriptorVar);
+          assign.value.writeVariableReference(vertexFunctionVar);
+        }
+        // pipelineStateDescriptor.fragmentFunction = fragmentFunction;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref.writePropertyAccess(this.writer.makeInternalToken('fragmentFunction')).source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeVariableReference(fragmentFunctionVar);
+        // }
+        // pipelineStateDescriptor.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('pixelFormat'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLPixelFormatBGRA8Unorm_sRGB'));
+        // }
+        // // pipelineStateDescriptor.colorAttachments[0].blendingEnabled = true;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('blendingEnabled'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeLiteralBool(true);
+        // }
+        // // pipelineStateDescriptor.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('alphaBlendOperation'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLBlendOperationAdd'));
+        // }
+        // // pipelineStateDescriptor.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('rgbBlendOperation'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLBlendOperationAdd'));
+        // }
+        // // pipelineStateDescriptor.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('destinationAlphaBlendFactor'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLBlendFactorOne'));
+        // }
+        // // pipelineStateDescriptor.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('destinationRGBBlendFactor'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLBlendFactorOne'));
+        // }
+        // // pipelineStateDescriptor.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('sourceAlphaBlendFactor'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLBlendFactorOne'));
+        // }
+        // // pipelineStateDescriptor.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('sourceRGBBlendFactor'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(pipelineStateDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLBlendFactorSourceAlpha'));
+        // }
+        // drawTriangle1_pipeline1 = [device newRenderPipelineStateWithDescriptor:pipelineStateDescriptor error:&error];
+        {
+          const assign = blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(pipelineInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+          const call = assign.value.writeStaticFunctionCall(this.writer.makeInternalToken('MTLNewComputePipelineStateWithDescriptor'));
+          call.addArg().writeVariableReference(pipelineStateDescriptorVar);
+        }
+        // // MTLRenderPassDescriptor* renderPassDescriptor = [MTLRenderPassDescriptor new];
+        // const renderPassDescriptorVar = allocTmpOut(this.privateTypes.MTLRenderPassDescriptor);
+        // const renderPassDescriptor = blockWriter.writeVariableDeclaration(renderPassDescriptorVar);
+        // const renderPassDescriptorInit = renderPassDescriptor.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MakeMTLRenderPassDescriptor'));
+        // // renderPassDescriptor.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('clearColor'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(renderPassDescriptorVar);
+        //   const call = assign.value.writeStaticFunctionCall(this.writer.makeInternalToken('MTLClearColorMake'));
+        //   call.addArg().writeLiteralFloat(0);
+        //   call.addArg().writeLiteralFloat(0);
+        //   call.addArg().writeLiteralFloat(0);
+        //   call.addArg().writeLiteralFloat(0);
+        // }
+        // // renderPassDescriptor.colorAttachments[0].loadAction = MTLLoadActionClear;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('loadAction'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(renderPassDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLLoadActionClear'));
+        // }
+        // // renderPassDescriptor.colorAttachments[0].storeAction = MTLStoreActionStore;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('storeAction'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(renderPassDescriptorVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLStoreActionStore'));
+        // }
+        // // drawTriangle1_renderPassDescriptor1 = renderPassDescriptor;
+        // {
+        //   const assign = blockWriter.writeAssignmentStatement();
+        //   assign.ref.writePropertyAccess(renderPassDescriptorInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+        //   assign.value.writeVariableReference(renderPassDescriptorVar);
+        // }
+      }
+
+
+      {
+        const allocTmpOut = (bopType: BopType): CodeVariable => {
+          const outBopVar = this.block.mapIdentifier('tmp', bopType.tempType, bopType, /* anonymous */ true);
+          const outVar = this.blockWriter.scope.createVariableInScope(outBopVar.type, getNodeLabel(computeCallNode));
+          outBopVar.result = outVar;
+          return outVar;
+        };
+
+        // auto positions = generateTriangleVertices(10);
+        // const positionsVar = allocTmpOut(this.functionType);
+        // const positionsVar = this.readResult(vertexArgBops[0]).result!;
+        const vertexOptionsBopVar = this.readResult(vertexArgBops[0]);
+        // const fragmentOptionsBopVar = this.readResult(fragmentArgBops[0]);
+
+        // Texture renderTarget = AllocatePersistentTexture(GetTrackTextureFormat(), /* salt */ 12345678);
+        // const renderTargetVar = allocTmpOut(this.privateTypes.Texture);
+        // const renderTarget = this.blockWriter.writeVariableDeclaration(renderTargetVar);
+        // const renderTargetInit = renderTarget.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('AllocatePersistentTexture'));
+        // renderTargetInit.addArg().writeStaticFunctionCall(this.writer.makeInternalToken('GetTrackTextureFormat'));
+        // renderTargetInit.addArg().writeLiteralInt(12345678);
+
+        // Metadata_drawTriangle1_vertexShader metadata = {};
+        // Metadata_drawTriangle1_fragmentShader metadata = {};
+
+
+
+        // MTLRenderPassDescriptor* renderPassDescriptor = drawTriangle1_renderPassDescriptor1;
+        // const renderPassDescriptorVar = allocTmpOut(this.privateTypes.MTLComputePassDescriptor);
+        // const renderPassDescriptor = this.blockWriter.writeVariableDeclaration(renderPassDescriptorVar);
+        // const renderPassDescriptorInit = renderPassDescriptor.initializer.writeExpression().writePropertyAccess(renderPassDescriptorInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+        // renderPassDescriptor.colorAttachments[0].texture = renderTarget;
+        // {
+        //   const assign = this.blockWriter.writeAssignmentStatement();
+        //   assign.ref
+        //       .writePropertyAccess(this.writer.makeInternalToken('texture'))
+        //       .source.writeIndexAccess({ indexLiteral: 0 })
+        //       .source.writePropertyAccess(this.writer.makeInternalToken('colorAttachments'))
+        //       .source.writeVariableReference(renderPassDescriptorVar);
+        //   assign.value.writeVariableReference(renderTargetVar);
+        // }
+        // id<MTLRenderCommandEncoder> encoder = [GetCurrentCommandBuffer() renderCommandEncoderWithDescriptor:renderPassDescriptor];
+        const encoderVar = allocTmpOut(this.privateTypes.MTLRenderCommandEncoder);
+        const encoder = this.blockWriter.writeVariableDeclaration(encoderVar);
+        const encoderInit = encoder.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('MakeMTLComputeCommandEncoder'));
+        // encoderInit.addArg().writeVariableReference(renderPassDescriptorVar);
+        // encoder.label = @"RenderPrimitives";
+        {
+          const assign = this.blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(this.writer.makeInternalToken('label')).source.writeVariableReference(encoderVar);
+          assign.value.writeLiteralString(pipelineName, { managed: true });
+        }
+        // [encoder setCullMode:MTLCullModeNone];
+        // {
+        //   const assign = this.blockWriter.writeAssignmentStatement();
+        //   assign.ref.writePropertyAccess(this.writer.makeInternalToken('cullMode')).source.writeVariableReference(encoderVar);
+        //   assign.value.writeIdentifier(this.writer.makeInternalToken('MTLCullModeNone'));
+        // }
+        // [encoder setRenderPipelineState:drawTriangle1_pipeline1];
+        {
+          const assign = this.blockWriter.writeAssignmentStatement();
+          assign.ref.writePropertyAccess(this.writer.makeInternalToken('pipelineState')).source.writeVariableReference(encoderVar);
+          assign.value.writePropertyAccess(pipelineInstanceVar.identifierToken).source.writeVariableReference(this.instanceVarsIdentifier);
+        }
+
+        // [encoder setVertexBytes:&vertexMetadata length:sizeof(vertexMetadata) atIndex:0];
+        // [encoder setVertexBuffer:position.GpuBuffer() offset:0 atIndex:1];
+        // {
+        //   const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderSetVertexBuffer'));
+        //   call.addArg().writeVariableReference(encoderVar);
+        //   call.addArg().writeVariableReference(positionsVar);
+        //   call.addArg().writeLiteralInt(0);
+        //   call.addArg().writeLiteralInt(0);
+        // }
+        // [encoder setVertexBytes:&vertexOptions length:sizeof(vertexOptions) atIndex:2];
+
+        const bindBindings = (kernelImpl: BopFunctionConcreteImplDetail, dataVar: CodeVariable) => {
+          const stage = 'Compute';
+          const bindings = kernelImpl.gpuBindings;
+          if (!this.verifyNotNulllike(bindings, `Expected GPU bindings for ${stage} function, but none were found.`)) {
+            return;
+          }
+          for (const binding of bindings.bindings) {
+            if (binding.type === 'fixed') {
+              var bufferFillerVar = this.blockWriter.scope.allocateVariableIdentifier(this.privateTypes.BufferFiller.tempType, BopIdentifierPrefix.Local, 'bufferFiller');
+              console.log(this.privateTypes.BufferFiller);
+              const stmt = this.blockWriter.writeVariableDeclaration(bufferFillerVar);
+              stmt.initializer.writeAssignStructField(this.writer.makeInternalToken('byteLength')).value.writeLiteralInt(binding.byteLength);
+              binding.marshal(dataVar, new BufferFiller(this, bufferFillerVar), this.blockWriter);
+
+              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Bytes`));
+              call.addArg().writeVariableReference(encoderVar);
+              call.addArg().writeMethodCall(this.writer.makeInternalToken('getBuffer')).source.writeVariableReference(bufferFillerVar);
+              call.addArg().writeLiteralInt(0);
+              call.addArg().writeLiteralInt(binding.location);
+            } else if (binding.type === 'array') {
+              var bufferFillerVar = this.blockWriter.scope.allocateVariableIdentifier(this.privateTypes.BufferFiller.tempType, BopIdentifierPrefix.Local, 'bufferFiller');
+              console.log(this.privateTypes.BufferFiller);
+              const stmt = this.blockWriter.writeVariableDeclaration(bufferFillerVar);
+              const bufferLengthExpr = stmt.initializer.writeAssignStructField(this.writer.makeInternalToken('byteLength')).value.writeBinaryOperation(CodeBinaryOperator.Multiply);
+              bufferLengthExpr.lhs.writeLiteralInt(binding.elementMarshalBinding.byteLength);
+              binding.writeGetLength(dataVar, bufferLengthExpr.rhs);
+              binding.marshal(dataVar, new BufferFiller(this, bufferFillerVar), this.blockWriter);
+
+              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Bytes`));
+              call.addArg().writeVariableReference(encoderVar);
+              call.addArg().writeMethodCall(this.writer.makeInternalToken('getBuffer')).source.writeVariableReference(bufferFillerVar);
+              call.addArg().writeLiteralInt(0);
+              call.addArg().writeLiteralInt(binding.location);
+            }
+          }
+        };
+
+        bindBindings(vertexFunctionConcreteImpl, vertexOptionsBopVar.result!);
+        // bindBindings(fragmentFunctionConcreteImpl, fragmentOptionsBopVar.result!, 'Fragment');
+        // {
+        //   const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderSetFragmentBytes'));
+        //   call.addArg().writeVariableReference(encoderVar);
+        //   call.addArg().writeVariableReference(fragmentOptionsVar);
+        //   call.addArg().writeLiteralInt(0);
+        //   call.addArg().writeLiteralInt(0);
+        // }
+        // [encoder setFragmentBytes:&fragmentMetadata length:sizeof(fragmentMetadata) atIndex:0];
+        // [encoder setFragmentBytes:&fragmentOptions length:sizeof(fragmentOptions) atIndex:1];
+
+        // [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:(uint)(positions.GetCount())];
+        {
+          const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderDispatchWorkgroups'));
+          call.addArg().writeVariableReference(encoderVar);
+          call.addArg().writeVariableReference(this.readResult(threadCountBop).result!);
+        }
+        // [encoder endEncoding];
+        {
+          const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderEndEncoding'));
+          call.addArg().writeVariableReference(encoderVar);
+        }
+        // return renderTarget;
+        // {
+        //   const ret = this.blockWriter.writeReturnStatement();
+        //   ret.expr.writeVariableReference(renderTargetVar);
+        // }
+      }
+
+
+      // Allocate/resize persistent output texture.
+      // Bind vertex stage buffers.
+      // Bind fragment stage buffers.
+      // Queue render command.
+      const outBopVar = this.block.mapIdentifier('tmp', this.privateTypes.MTLFunction.tempType, this.privateTypes.MTLFunction, /* anonymous */ true);
+      const outVar = this.blockWriter.scope.createVariableInScope(outBopVar.type, pipelineName);
+      outBopVar.result = outVar;
+
+      const newVar = this.blockWriter.writeVariableDeclaration(outVar);
+      newVar.initializer.writeExpression().writeLiteralInt(1234);
+      return { expressionResult: outBopVar };
+    },
+  };
+}
+
+
+
+
+
+
+export function bopRenderElementsCall(this: BopProcessor, fragmentCallNode: ts.CallExpression, vertexCallNode: ts.CallExpression, renderElementsCallNode: ts.CallExpression): BopStage|undefined {
+  // const fragmentCallNode = node;
+  // const vertexCallNode = node.expression;
+  // const renderElementsCallNode = node.expression.expression;
   const fragmentFunctionSignature = this.tc.getResolvedSignature(fragmentCallNode, [], fragmentCallNode.arguments.length);
   const vertexFunctionSignature = this.tc.getResolvedSignature(vertexCallNode, [], vertexCallNode.arguments.length);
   const renderElementsFunctionSignature = this.tc.getResolvedSignature(renderElementsCallNode, [], renderElementsCallNode.arguments.length);
@@ -592,9 +1102,11 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
       // Resolve vertex function.
       // Emit a wrapper GPU vertex function.
       const vertexFunctionExprResult = this.readFullResult(vertexFunctionBop);
-      const vertexFunctionConcreteImpl = vertexFunctionExprResult?.expressionResult?.bopType.functionOf?.concreteImpl;
+      // const vertexFunctionConcreteImpl = vertexFunctionExprResult?.expressionResult?.bopType.functionOf?.concreteImpl;
+      const vertexFunctionConcreteImpl = this.resolveFunctionOverload(vertexFunctionExprResult?.expressionResult?.bopType, vertexFunctionSignature)?.concreteImpl;
       const fragmentFunctionExprResult = this.readFullResult(fragmentFunctionBop);
-      const fragmentFunctionConcreteImpl = fragmentFunctionExprResult?.expressionResult?.bopType.functionOf?.concreteImpl;
+      // const fragmentFunctionConcreteImpl = fragmentFunctionExprResult?.expressionResult?.bopType.functionOf?.concreteImpl;
+      const fragmentFunctionConcreteImpl = this.resolveFunctionOverload(fragmentFunctionExprResult?.expressionResult?.bopType, fragmentFunctionSignature)?.concreteImpl;
       if (!this.verifyNotNulllike(vertexFunctionConcreteImpl, `Vertex shader is not concrete.`) ||
           !this.verifyNotNulllike(vertexFunctionConcreteImpl.bopVar.result, `Vertex shader is not complete.`) ||
           !this.verifyNotNulllike(fragmentFunctionConcreteImpl, `Fragment shader is not concrete.`) ||
@@ -602,7 +1114,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         return;
       }
 
-      const pipelineName = 'DrawTriangle';
+      const pipelineName = vertexFunctionConcreteImpl.bopVar.nameHint + '_' + fragmentFunctionConcreteImpl.bopVar.nameHint;
       // Do _not_ mark references, as they are referenced indirectly.
       const vertexFuncIdentifier = vertexFunctionConcreteImpl.bopVar.result.identifierToken;
       vertexFunctionConcreteImpl.touchedByGpu = true;
@@ -672,7 +1184,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
         {
           const assign = blockWriter.writeAssignmentStatement();
           assign.ref.writePropertyAccess(this.writer.makeInternalToken('label')).source.writeVariableReference(pipelineStateDescriptorVar);
-          assign.value.writeLiteralString('RenderPrimitives', { managed: true });
+          assign.value.writeLiteralString(pipelineName, { managed: true });
         }
         // pipelineStateDescriptor.vertexFunction = vertexFunction;
         {
@@ -823,7 +1335,7 @@ export function bopShaderBinding(this: BopProcessor, node: ts.CallExpression): B
       {
         const allocTmpOut = (bopType: BopType): CodeVariable => {
           const outBopVar = this.block.mapIdentifier('tmp', bopType.tempType, bopType, /* anonymous */ true);
-          const outVar = this.blockWriter.scope.createVariableInScope(outBopVar.type, getNodeLabel(node));
+          const outVar = this.blockWriter.scope.createVariableInScope(outBopVar.type, getNodeLabel(renderElementsCallNode));
           outBopVar.result = outVar;
           return outVar;
         };
