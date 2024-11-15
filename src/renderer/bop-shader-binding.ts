@@ -53,19 +53,20 @@ class BufferFiller {
 export interface GpuBindingBase {
   nameHint: string;
   location: number;
-  marshal(dataVar: CodeVariable, bufferVars: BufferFiller, body: CodeStatementWriter): void;
   unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BopVariable): void;
 }
 export interface GpuFixedBinding extends GpuBindingBase {
   type: 'fixed';
   byteLength: number;
   marshalStructType: BopType;
+  marshal(dataVar: CodeVariable, bufferVars: BufferFiller, body: CodeStatementWriter): void;
 }
 export interface GpuArrayBinding extends GpuBindingBase {
   type: 'array';
   userType: BopType;
   elementMarshalBinding: GpuFixedBinding;
   writeGetLength(dataVar: CodeVariable, expr: CodeExpressionWriter): void;
+  marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable };
 }
 export type GpuBinding = GpuFixedBinding|GpuArrayBinding;
 
@@ -75,6 +76,7 @@ export interface GpuBindings {
 
 
 function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<BopType>): GpuBindings {
+  const bopProcessor = this;
   const thisVisitedSet = visitedSet ?? new Set<BopType>();
   const pushVisitType = (t: BopType) => {
     if (thisVisitedSet.has(t)) {
@@ -275,7 +277,7 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
         }
         readExprLeaf.writeVariableReference(dataVar);
       },
-      marshal(dataVar: CodeVariable, bufferFiller: BufferFiller, body: CodeStatementWriter): void {
+      marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable } {
         const arrayVar = body.scope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.tempType, BopIdentifierPrefix.Local, `bindArray_${binding.path.at(-1)?.identifier.nameHint}`);
         let readExprLeaf = body.writeVariableDeclaration(arrayVar).initializer.writeExpression();
         for (let i = binding.path.length - 1; i >= 0; --i) {
@@ -285,31 +287,32 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
         }
         readExprLeaf.writeVariableReference(dataVar);
 
-        const forIndex = body.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'index');
-        const forLength = body.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'length');
-        this.writeGetLength(dataVar, body.writeVariableDeclaration(forLength).initializer.writeExpression());
-        const forLoop = body.writeForLoop();
-        forLoop.initializer.writeVariableDeclaration(forIndex).initializer.writeExpression().writeLiteralInt(0);
-        const cond = forLoop.condition.writeBinaryOperation(CodeBinaryOperator.LessThan);
-        cond.lhs.writeVariableReference(forIndex);
-        cond.rhs.writeVariableReference(forLength);
-        const updateAssign = forLoop.updatePart.writeAssignmentStatement();
-        updateAssign.ref.writeVariableReference(forIndex);
-        const updateIncrement = updateAssign.value.writeBinaryOperation(CodeBinaryOperator.Add);
-        updateIncrement.lhs.writeVariableReference(forIndex);
-        updateIncrement.rhs.writeLiteralInt(1);
+        if (binding.userType.structOf && !binding.userType.structOf.marshalFunc) {
+          const marshalFuncVar = bopProcessor.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, `marshal_${binding.userType.debugName}`)
+          const marshalFunc = bopProcessor.writer.global.writeFunction(marshalFuncVar.identifierToken);
+          marshalFunc.touchedByCpu = true;
+          binding.userType.structOf.marshalFunc = marshalFuncVar;
+          binding.userType.structOf.marshalLength = binding.elementBinding.byteLength;
 
-        const elementVar = forLoop.body.scope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.tempType, BopIdentifierPrefix.Local, 'element');
-        const elementGet = forLoop.body.writeVariableDeclaration(elementVar).initializer.writeExpression().writeMethodCall(self.writer.makeInternalToken('at'));
-        elementGet.addArg().writeVariableReference(forIndex);
-        elementGet.source.writeVariableReference(arrayVar);
+          const funcScope = bopProcessor.writer.global.scope.createChildScope(CodeScopeType.Function);
+          const valueVar = funcScope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.tempType, BopIdentifierPrefix.Local, 'value');
+          marshalFunc.addParam(binding.elementBinding.marshalStructType.tempType, valueVar.identifierToken);
+          const bufferFillerVar = funcScope.allocateVariableIdentifier(bopProcessor.privateTypes.BufferFiller.tempType, BopIdentifierPrefix.Local, 'bufferFiller');
+          marshalFunc.addParam(bopProcessor.privateTypes.BufferFiller.tempType, bufferFillerVar.identifierToken);
+          const indexVar = funcScope.allocateVariableIdentifier(bopProcessor.intType.tempType, BopIdentifierPrefix.Local, 'index');
+          marshalFunc.addParam(bopProcessor.intType.tempType, indexVar.identifierToken);
+          const funcBody = marshalFunc.body;
 
-        const baseOffsetVar = forLoop.body.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'baseOffset');
-        const baseOffset = forLoop.body.writeVariableDeclaration(baseOffsetVar).initializer.writeExpression().writeBinaryOperation(CodeBinaryOperator.Multiply);
-        baseOffset.lhs.writeVariableReference(forIndex);
-        baseOffset.rhs.writeLiteralInt(binding.elementBinding.byteLength);
-        bufferFiller.baseOffsetVar = baseOffsetVar;
-        binding.elementBinding.marshal(elementVar, bufferFiller, forLoop.body);
+          const bufferFiller = new BufferFiller(bopProcessor, bufferFillerVar);
+
+          const baseOffsetVar = funcBody.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'baseOffset');
+          const baseOffset = funcBody.writeVariableDeclaration(baseOffsetVar).initializer.writeExpression().writeBinaryOperation(CodeBinaryOperator.Multiply);
+          baseOffset.lhs.writeVariableReference(indexVar);
+          baseOffset.rhs.writeLiteralInt(binding.elementBinding.byteLength);
+          bufferFiller.baseOffsetVar = baseOffsetVar;
+          binding.elementBinding.marshal(valueVar, bufferFiller, funcBody);
+        }
+        return { arrayVar: arrayVar };
       },
       unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BopVariable): void {
         const rootBlock = intoBopVar.lookupBlockOverride ?? self.globalBlock.createChildBlock(CodeScopeType.Local);
@@ -404,7 +407,7 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
   let returnType;
   if (needsReturnValue && !hasReturnValue) {
     this.logAssert(`${isGpuVertexFunc} output is not concrete.`);
-  } else if (hasCustomReturnType) {
+  } else if (hasCustomReturnType && !isGpuFragmentFunc) {
     const vertexOutStructIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${funcName}_${stage}Out`);
     const vertexOutStructWriter = this.writer.global.writeStruct(vertexOutStructIdentifier);
     const vertexOutStructScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
@@ -553,7 +556,7 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
         } else if (binding.type === 'array') {
           const userElementType = binding.userType;
           const userParamType = userElementType.storageType.toArray();
-          const uniformVar = this.writer.global.scope.allocateVariableIdentifier(userParamType, BopIdentifierPrefix.Local, param.identifier);
+          const uniformVar = this.writer.global.scope.allocateVariableIdentifier(userParamType, BopIdentifierPrefix.Local, `${param.identifier}_${binding.nameHint}`);
           rewriterFuncs.push((funcWriter) => {
             binding.unmarshal(uniformVar, funcWriter.body, argVar);
           });
@@ -982,7 +985,6 @@ export function bopComputeCall(this: BopProcessor, shaderCallNode: ts.CallExpres
           for (const binding of bindings.bindings) {
             if (binding.type === 'fixed') {
               var bufferFillerVar = this.blockWriter.scope.allocateVariableIdentifier(this.privateTypes.BufferFiller.tempType, BopIdentifierPrefix.Local, 'bufferFiller');
-              console.log(this.privateTypes.BufferFiller);
               const stmt = this.blockWriter.writeVariableDeclaration(bufferFillerVar);
               stmt.initializer.writeAssignStructField(this.writer.makeInternalToken('byteLength')).value.writeLiteralInt(binding.byteLength);
               binding.marshal(dataVar, new BufferFiller(this, bufferFillerVar), this.blockWriter);
@@ -993,17 +995,10 @@ export function bopComputeCall(this: BopProcessor, shaderCallNode: ts.CallExpres
               call.addArg().writeLiteralInt(0);
               call.addArg().writeLiteralInt(binding.location);
             } else if (binding.type === 'array') {
-              var bufferFillerVar = this.blockWriter.scope.allocateVariableIdentifier(this.privateTypes.BufferFiller.tempType, BopIdentifierPrefix.Local, 'bufferFiller');
-              console.log(this.privateTypes.BufferFiller);
-              const stmt = this.blockWriter.writeVariableDeclaration(bufferFillerVar);
-              const bufferLengthExpr = stmt.initializer.writeAssignStructField(this.writer.makeInternalToken('byteLength')).value.writeBinaryOperation(CodeBinaryOperator.Multiply);
-              bufferLengthExpr.lhs.writeLiteralInt(binding.elementMarshalBinding.byteLength);
-              binding.writeGetLength(dataVar, bufferLengthExpr.rhs);
-              binding.marshal(dataVar, new BufferFiller(this, bufferFillerVar), this.blockWriter);
-
-              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Bytes`));
+              const { arrayVar }  = binding.marshal(dataVar, this.blockWriter);
+              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Buffer`));
               call.addArg().writeVariableReference(encoderVar);
-              call.addArg().writeMethodCall(this.writer.makeInternalToken('getBuffer')).source.writeVariableReference(bufferFillerVar);
+              call.addArg().writeVariableReference(arrayVar);
               call.addArg().writeLiteralInt(0);
               call.addArg().writeLiteralInt(binding.location);
             }
@@ -1399,7 +1394,7 @@ export function bopRenderElementsCall(this: BopProcessor, fragmentCallNode: ts.C
         // [encoder setVertexBytes:&vertexMetadata length:sizeof(vertexMetadata) atIndex:0];
         // [encoder setVertexBuffer:position.GpuBuffer() offset:0 atIndex:1];
         {
-          const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderSetVertexBuffer'));
+          const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('EncoderSetVertexAttributeBuffer'));
           call.addArg().writeVariableReference(encoderVar);
           call.addArg().writeVariableReference(positionsVar);
           call.addArg().writeLiteralInt(0);
@@ -1426,17 +1421,10 @@ export function bopRenderElementsCall(this: BopProcessor, fragmentCallNode: ts.C
               call.addArg().writeLiteralInt(0);
               call.addArg().writeLiteralInt(binding.location);
             } else if (binding.type === 'array') {
-              var bufferFillerVar = this.blockWriter.scope.allocateVariableIdentifier(this.privateTypes.BufferFiller.tempType, BopIdentifierPrefix.Local, 'bufferFiller');
-              console.log(this.privateTypes.BufferFiller);
-              const stmt = this.blockWriter.writeVariableDeclaration(bufferFillerVar);
-              const bufferLengthExpr = stmt.initializer.writeAssignStructField(this.writer.makeInternalToken('byteLength')).value.writeBinaryOperation(CodeBinaryOperator.Multiply);
-              bufferLengthExpr.lhs.writeLiteralInt(binding.elementMarshalBinding.byteLength);
-              binding.writeGetLength(dataVar, bufferLengthExpr.rhs);
-              binding.marshal(dataVar, new BufferFiller(this, bufferFillerVar), this.blockWriter);
-
-              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Bytes`));
+              const { arrayVar }  = binding.marshal(dataVar, this.blockWriter);
+              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Buffer`));
               call.addArg().writeVariableReference(encoderVar);
-              call.addArg().writeMethodCall(this.writer.makeInternalToken('getBuffer')).source.writeVariableReference(bufferFillerVar);
+              call.addArg().writeVariableReference(arrayVar);
               call.addArg().writeLiteralInt(0);
               call.addArg().writeLiteralInt(binding.location);
             }

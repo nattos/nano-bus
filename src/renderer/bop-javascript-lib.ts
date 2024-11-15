@@ -4,6 +4,12 @@ import { WGSL_LIB_CODE } from './bop-wgsl-lib';
 
 
 
+class BopClass {
+  readonly fields?: Record<string, BopClass>;
+  marshalByteStride?: number;
+  marshalBytesInto?(value: any, into: BufferFiller, indexOffset: number): void;
+}
+
 const BopLib = {
   int: {
     cast(x: number): number {
@@ -114,6 +120,8 @@ class BopArrayImpl<T> {
   private cpuDirty = false;
   private gpuDirty = false;
   private gpuBuffer?: GPUBuffer;
+  private gpuVertexDirty = false;
+  private gpuVertexBuffer?: GPUBuffer;
 
   constructor(readonly elementType: BopClass|undefined, readonly capacity: number) {
     // const value: T = new (elementType as any)();
@@ -125,28 +133,93 @@ class BopArrayImpl<T> {
   }
   set(i: number, value: T) {
     this.buffer[i] = value;
-    this.markCpuDirty();
+    this.markCpuWrite();
   }
   push(v: T) {
     this.buffer[this.length++] = v;
-    this.markCpuDirty();
+    this.markCpuWrite();
   }
 
-  markCpuDirty() {
-    this.cpuDirty = true;
-  }
-  markGpuDirty() {
+  markCpuWrite() {
     this.gpuDirty = true;
   }
-  ensureGpu() {
-    // if (!this.gpuDirty && this.gpuBuffer?.size === ) {
-    // }
+  markGpuWrite() {
+    this.cpuDirty = true;
+  }
+  getGpuBuffer(): GPUBuffer|undefined {
+    return this.gpuBuffer;
+  }
+  getGpuVertexBuffer(): GPUBuffer|undefined {
+    return this.gpuVertexBuffer;
+  }
+  ensureGpuBuffer() {
+    const stride = this.elementType?.marshalByteStride;
+    const marshalFunc = this.elementType?.marshalBytesInto;
+    const device = SharedMTLInternals().device;
+    if (stride === undefined || marshalFunc === undefined || !device) {
+      return;
+    }
+    const count = this.length;
+    const byteLength = stride * count;
+
+    let gpuDirty = this.gpuDirty;
+    if (this.gpuBuffer === undefined || this.gpuBuffer.size < byteLength) {
+      console.log("device.createBuffer");
+      this.gpuBuffer = device.createBuffer({
+        size: byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.UNIFORM
+      });
+      gpuDirty = true;
+    }
+    if (gpuDirty) {
+      this.gpuDirty = false;
+      this.gpuVertexDirty = true;
+
+      const bufferFiller = new BufferFiller(byteLength);
+      for (let i = 0; i < count; ++i) {
+        marshalFunc(this.buffer[i], bufferFiller, i);
+      }
+      device.queue.writeBuffer(this.gpuBuffer, 0, bufferFiller.getBuffer(), 0, byteLength);
+      console.log("ensureGpuBuffer", "device.queue.writeBuffer(this.gpuBuffer, 0, bufferFiller.getBuffer(), 0, byteLength);");
+    }
+  }
+  ensureGpuVertexBuffer(commandEncoder: GPUCommandEncoder) {
+    this.ensureGpuBuffer();
+    const gpuBuffer = this.gpuBuffer;
+    const device = SharedMTLInternals().device;
+    if (!device || !gpuBuffer) {
+      return;
+    }
+    const byteLength = gpuBuffer.size;
+
+    let gpuDirty = this.gpuVertexDirty;
+    if (this.gpuVertexBuffer === undefined || this.gpuVertexBuffer.size < byteLength) {
+      this.gpuVertexBuffer = device.createBuffer({
+        size: byteLength,
+        usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
+      });
+      gpuDirty = true;
+    }
+    if (gpuDirty) {
+      this.gpuVertexDirty = false;
+      commandEncoder.copyBufferToBuffer(gpuBuffer, 0, this.gpuVertexBuffer, 0, byteLength);
+      console.log("ensureGpuVertexBuffer", "commandEncoder.copyBufferToBuffer(gpuBuffer, 0, this.gpuVertexBuffer, 0, byteLength);");
+    }
   }
 }
 
 class BopArray<T> {
   constructor(readonly elementType: BopClass|undefined, readonly capacity: number) {
     const impl = new BopArrayImpl<T>(elementType, capacity);
+    const implPrototype = BopArrayImpl.prototype;
+    for (const k of Object.getOwnPropertyNames(implPrototype)) {
+      const v = (implPrototype as any)[k];
+      if (typeof v === 'function') {
+        (impl as any)[k] = v.bind(impl);
+      }
+    }
+
+    const getImpl = () => impl;
 
     return new Proxy(this, {
       set(target, p, newValue, receiver) {
@@ -158,12 +231,12 @@ class BopArray<T> {
         return true;
       },
       get(target, p, receiver) {
-        const rawValue = Reflect.get(target, p, receiver);
+        const rawValue = Reflect.get(impl, p, receiver);
         if (typeof(p) !== 'string' || rawValue !== undefined) {
           return rawValue;
         }
         if (p === 'getImpl') {
-          return impl;
+          return getImpl;
         }
         return impl.at(parseInt(p));
       },
@@ -210,6 +283,10 @@ export class MTLInternals {
   readonly ready;
   readonly shadersReady;
   readonly targetReady;
+  readonly globalEncoderQueue = new utils.OperationQueue();
+
+  get device() { return this._device; }
+  private _device?: GPUDevice;
 
   private readonly shaderCodeProvider = new utils.Resolvable<string>();
   private readonly targetCanvasContextProvider = new utils.Resolvable<GPUCanvasContext>();
@@ -218,6 +295,7 @@ export class MTLInternals {
     const ready = this.ready = (async () => {
       const adapter = await navigator.gpu.requestAdapter() ?? undefined;
       const device = await adapter?.requestDevice();
+      this._device = device;
       if (!adapter || !device) {
         console.log('WebGPU initialization failed.');
       }
@@ -593,22 +671,44 @@ class MTLRenderCommandEncoder {
   cullMode = MTLCullMode.MTLCullModeNone;
   renderPipelineState = InvalidMTLRenderPipelineState();
 
-  vertexBytes: Array<ArrayBuffer|undefined> = [];
-  fragmentBytes: Array<ArrayBuffer|undefined> = [];
+  readonly vertexAttributeBytes: Array<BopArray<unknown>|undefined> = [];
+  readonly vertexBytes: Array<ArrayBuffer|BopArray<unknown>|undefined> = [];
+  readonly fragmentBytes: Array<ArrayBuffer|BopArray<unknown>|undefined> = [];
 
-  readonly ready;
+  private readonly preready;
+  private readonly ready;
+  private readonly prequeue = new utils.OperationQueue();
   private readonly queue = new utils.OperationQueue();
   private readonly compileFlag = new utils.Resolvable();
+  private readonly finishedEncodingFlag = new utils.WaitableFlag();
 
   constructor(readonly renderPassDescriptor: MTLRenderPassDescriptor) {
-    this.ready = (async () => {
+    this.preready = (async () => {
       const internals = SharedMTLInternals();
       await this.compileFlag.promise;
       const { device } = await internals.ready;
       const { targetTextureViewFunc } = await internals.targetReady;
       this.renderPipelineState.descriptor.compile();
       const { renderPipeline } = await this.renderPipelineState.descriptor.ready;
+
+      const acquiredGlobalLock = new utils.Resolvable();
+      internals.globalEncoderQueue.push(async () => {
+        acquiredGlobalLock.resolve(undefined);
+        await this.finishedEncodingFlag.wait();
+      });
+      await acquiredGlobalLock.promise;
+      console.log("MTLRenderCommandEncoder", "acquiredGlobalLock");
+
       const commandEncoder = device?.createCommandEncoder();
+      if (commandEncoder) {
+        commandEncoder.label = this.label;
+      }
+
+      return { device, commandEncoder, renderPipeline, targetTextureViewFunc };
+    })();
+    this.ready = (async () => {
+      const { device, commandEncoder, renderPipeline, targetTextureViewFunc } = await this!.preready;
+      await this.prequeue.push(() => {});
 
       const clearColor: GPUColor = MTLToGpuColor(this.renderPassDescriptor.colorAttachments[0].clearColor);
       const renderPassDescriptor: GPURenderPassDescriptor = {
@@ -622,30 +722,52 @@ class MTLRenderCommandEncoder {
         ],
       };
       const encoder = commandEncoder?.beginRenderPass(renderPassDescriptor);
+      if (encoder) {
+        encoder.label = this.label;
+      }
       if (renderPipeline) {
         encoder?.setPipeline(renderPipeline);
       }
       return { device, commandEncoder, encoder, renderPipeline };
     })();
+    this.prequeue.push(() => this.preready);
     this.queue.push(() => this.ready);
   }
 
-  setVertexBytes(buffer: ArrayBuffer, index: number) {
+  setVertexAttributeBytes(buffer: BopArray<unknown>, index: number) {
+    this.vertexAttributeBytes[index] = buffer;
+  }
+
+  setVertexBytes(buffer: ArrayBuffer|BopArray<unknown>, index: number) {
     this.vertexBytes[index] = buffer;
   }
 
-  setFragmentBytes(buffer: ArrayBuffer, index: number) {
+  setFragmentBytes(buffer: ArrayBuffer|BopArray<unknown>, index: number) {
     this.fragmentBytes[index] = buffer;
   }
 
-  queueTask(runner: (encoder: GPURenderPassEncoder, commandEncoder: GPUCommandEncoder, device: GPUDevice, renderPipeline: GPURenderPipeline) => Promise<unknown>) {
+  queuePretask(runner: (commandEncoder: GPUCommandEncoder, device: GPUDevice, renderPipeline: GPURenderPipeline) => Promise<unknown>) {
+    this.compileFlag.resolve(undefined);
+    this.prequeue.push(async () => {
+      const { device, commandEncoder, renderPipeline } = await this.preready;
+      if (!device || !commandEncoder || !renderPipeline) {
+        return;
+      }
+      await runner(commandEncoder, device, renderPipeline);
+    });
+  }
+
+  queueTask(runner: (encoder: GPURenderPassEncoder, commandEncoder: GPUCommandEncoder, device: GPUDevice, renderPipeline: GPURenderPipeline) => Promise<{ finishedEncoding?: boolean }|undefined|void>) {
     this.compileFlag.resolve(undefined);
     this.queue.push(async () => {
       const { device, commandEncoder, encoder, renderPipeline } = await this.ready;
       if (!device || !encoder || !commandEncoder || !renderPipeline) {
         return;
       }
-      await runner(encoder, commandEncoder, device, renderPipeline);
+      const result = await runner(encoder, commandEncoder, device, renderPipeline);
+      if (result?.finishedEncoding) {
+        this.finishedEncodingFlag.set();
+      }
     });
   }
 }
@@ -654,11 +776,12 @@ class MTLComputeCommandEncoder {
   label = 'Unknown Encoder';
   pipelineState = InvalidMTLComputePipelineState();
 
-  dataBytes: Array<ArrayBuffer|undefined> = [];
+  dataBytes: Array<ArrayBuffer|BopArray<unknown>|undefined> = [];
 
   readonly ready;
   private readonly queue = new utils.OperationQueue();
   private readonly compileFlag = new utils.Resolvable();
+  private readonly finishedEncodingFlag = new utils.WaitableFlag();
 
   constructor() {
     this.ready = (async () => {
@@ -667,9 +790,24 @@ class MTLComputeCommandEncoder {
       const { device } = await internals.ready;
       this.pipelineState.descriptor.compile();
       const { pipeline } = await this.pipelineState.descriptor.ready;
+
+      const acquiredGlobalLock = new utils.Resolvable();
+      internals.globalEncoderQueue.push(async () => {
+        acquiredGlobalLock.resolve(undefined);
+        await this.finishedEncodingFlag.wait();
+      });
+      await acquiredGlobalLock.promise;
+      console.log("MTLComputeCommandEncoder", "acquiredGlobalLock");
+
       const commandEncoder = device?.createCommandEncoder();
+      if (commandEncoder) {
+        commandEncoder.label = this.label;
+      }
 
       const encoder = commandEncoder?.beginComputePass();
+      if (encoder) {
+        encoder.label = this.label;
+      }
       if (pipeline) {
         encoder?.setPipeline(pipeline);
       }
@@ -678,18 +816,21 @@ class MTLComputeCommandEncoder {
     this.queue.push(() => this.ready);
   }
 
-  setBytes(buffer: ArrayBuffer, index: number) {
+  setBytes(buffer: ArrayBuffer|BopArray<unknown>, index: number) {
     this.dataBytes[index] = buffer;
   }
 
-  queueTask(runner: (encoder: GPUComputePassEncoder, commandEncoder: GPUCommandEncoder, device: GPUDevice, pipeline: GPUComputePipeline) => Promise<unknown>) {
+  queueTask(runner: (encoder: GPUComputePassEncoder, commandEncoder: GPUCommandEncoder, device: GPUDevice, pipeline: GPUComputePipeline) => Promise<{ finishedEncoding?: boolean }|undefined|void>) {
     this.compileFlag.resolve(undefined);
     this.queue.push(async () => {
       const { device, commandEncoder, encoder, pipeline } = await this.ready;
       if (!device || !encoder || !commandEncoder || !pipeline) {
         return;
       }
-      await runner(encoder, commandEncoder, device, pipeline);
+      const result = await runner(encoder, commandEncoder, device, pipeline);
+      if (result?.finishedEncoding) {
+        this.finishedEncodingFlag.set();
+      }
     });
   }
 }
@@ -702,136 +843,80 @@ export enum MTLPrimitiveType {
   MTLPrimitiveTypeTriangle = 'MTLPrimitiveTypeTriangle',
 }
 
-class BopClass {
-  readonly fields?: Record<string, BopClass>;
-  stride?: number;
-  marshalBytesIntoArrayBuffer?(value: any, index: number, into: Float32Array): void;
-}
 
-function getBopClassLayout(bopClass: BopClass|undefined) {
-  let marshalBytesIntoArrayBuffer = bopClass?.marshalBytesIntoArrayBuffer;
-  let stride = bopClass?.stride ?? 0;
-  if (!marshalBytesIntoArrayBuffer) {
-    interface Accessor {
-      getter?: (value: any, buffer: Float32Array, offset: number) => any;
-      children?: Accessor[];
-    }
-
-    let writeLength = 0;
-    const enumerateFieldsRec = (fields: Record<string, BopClass>): Accessor[] => {
-      const children = [];
-      for (const [ fieldName, fieldType ] of Object.entries(fields)) {
-        if (fieldType.fields) {
-          children.push({
-            getter: (parent: any) => parent[fieldName],
-            children: enumerateFieldsRec(fieldType.fields),
-          });
-        } else if (fieldType === BopLib.float) {
-          const fieldLength = 4;
-          const thisFieldOffset = writeLength;
-          children.push({
-            getter: (parent: any, buffer: Float32Array, offset: number) => {
-              const floatValue = parent[fieldName] as number;
-              buffer[(offset + thisFieldOffset) >> 2] = floatValue;
-            },
-          });
-          writeLength += fieldLength;
-        }
-      }
-      return children;
-    };
-
-    let fieldCopyAccessors: Accessor[];
-    if (bopClass?.fields) {
-      fieldCopyAccessors = enumerateFieldsRec(bopClass.fields);
-      stride = writeLength;
-    } else if (bopClass === BopLib.float) {
-      stride = 4;
-      fieldCopyAccessors = [{
-        getter: (parent: any, buffer: Float32Array, offset: number) => {
-          const floatValue = parent as number;
-          buffer[(offset + writeLength) >> 2] = floatValue;
-        },
-      }];
-    } else {
-      stride = 0;
-      fieldCopyAccessors = [];
-    }
-
-    const copyRec = (parent: any, offset: number, accessors: Accessor[], into: Float32Array) => {
-      for (const accessor of accessors) {
-        const fieldValue = accessor.getter?.(parent, into, offset);
-        if (accessor.children) {
-          copyRec(fieldValue, offset, accessor.children, into);
-        }
-      }
-    };
-
-    marshalBytesIntoArrayBuffer = (value: any, index: number, into: Float32Array) => {
-      const offset = index * stride;
-      copyRec(value, offset, fieldCopyAccessors, into);
-    };
-
-    if (bopClass) {
-      bopClass.stride = stride;
-      bopClass.marshalBytesIntoArrayBuffer = marshalBytesIntoArrayBuffer;
-    }
-  }
-  return {
-    stride,
-    marshalBytesIntoArrayBuffer,
-  };
-}
 
 function MakeMTLRenderCommandEncoder(renderPassDescriptor: MTLRenderPassDescriptor): MTLRenderCommandEncoder {
   return new MTLRenderCommandEncoder(renderPassDescriptor);
 }
-function EncoderSetVertexBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
-  console.log('EncoderSetVertexBuffer', encoder, buffer, offset, index);
-  encoder.queueTask(async (encoder, commandEncoder, device) => {
-    // TODO: Shadow copy buffer!!!
-    const elementZero = buffer.buffer[0];
-    const elementClass = elementZero?.constructor as BopClass|undefined;
-    const { stride, marshalBytesIntoArrayBuffer } = getBopClassLayout(elementClass);
-
-    const byteLength = stride * buffer.length;
-    const vertices = new Float32Array(byteLength >> 2);
-    for (let i = 0; i < buffer.length; ++i) {
-      marshalBytesIntoArrayBuffer(buffer.buffer[i], i, vertices);
-    }
-    const vertexBuffer = device.createBuffer({
-      size: vertices.byteLength, // make it big enough to store vertices in
-      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
-    });
-    device.queue.writeBuffer(vertexBuffer, 0, vertices, 0, vertices.length);
-    encoder.setVertexBuffer(index, vertexBuffer);
+function EncoderSetVertexAttributeBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
+  console.log('EncoderSetVertexAttributeBuffer', encoder, buffer, offset, index);
+  const bufferImpl = buffer.getImpl();
+  bufferImpl.ensureGpuBuffer();
+  encoder.queuePretask(async (commandEncoder) => {
+    bufferImpl.ensureGpuVertexBuffer(commandEncoder);
   });
+  encoder.setVertexAttributeBytes(buffer, index);
 }
 
 function EncoderSetVertexBytes(encoder: MTLRenderCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
   console.log('EncoderSetVertexBytes', encoder, buffer, offset, index);
   encoder.setVertexBytes(buffer, index);
 }
+function EncoderSetVertexBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
+  console.log('EncoderSetVertexBuffer', encoder, buffer, offset, index);
+  buffer.getImpl().ensureGpuBuffer();
+  encoder.setVertexBytes(buffer, index);
+}
 function EncoderSetFragmentBytes(encoder: MTLRenderCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
   console.log('EncoderSetFragmentBytes', encoder, buffer, offset, index);
+  encoder.setFragmentBytes(buffer, index);
+}
+function EncoderSetFragmentBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
+  console.log('EncoderSetFragmentBuffer', encoder, buffer, offset, index);
+  buffer.getImpl().ensureGpuBuffer();
   encoder.setFragmentBytes(buffer, index);
 }
 function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimitiveType, offset: number, count: number) {
   console.log('EncodeDrawPrimitives', encoder, type, offset, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
-    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|undefined>) => {
+    // Bind vertex attribute buffers.
+    for (let index = 0; index < proxyEncoder.vertexAttributeBytes.length; ++index) {
+      const buffer = proxyEncoder.vertexAttributeBytes[index]?.getImpl();
+      if (!buffer) {
+        continue;
+      }
+      const vertexBuffer = buffer.getGpuVertexBuffer();
+      if (!vertexBuffer) {
+        continue;
+      }
+      encoder.setVertexBuffer(index, vertexBuffer);
+    }
+
+    // Bind additional vertex and fragment shader buffers.
+    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|BopArray<unknown>|undefined>) => {
       const bindGroupEntries: GPUBindGroupEntry[] = [];
       for (let index = 0; index < buffers.length; ++index) {
         const byteArray = buffers[index];
-        if (!byteArray) {
-          continue;
+        let bufferBuffer;
+        if (byteArray instanceof BopArray) {
+          bufferBuffer = byteArray.getImpl().getGpuBuffer();
+          if (!bufferBuffer) {
+            console.log("missing!!!", "byteArray.getImpl().getGpuBuffer();");
+            continue;
+          }
+        } else {
+          if (!byteArray) {
+            continue;
+          }
+          // TODO: Pool allocate TMP buffer.
+          bufferBuffer = device.createBuffer({
+            size: byteArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
+          });
+          device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
+          console.log("EncoderDrawPrimitives", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
         }
-        const bufferBuffer = device.createBuffer({
-          size: byteArray.byteLength,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
-        });
-        device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
 
         const bindGroupEntry: GPUBindGroupEntry = {
           binding: index,
@@ -856,12 +941,6 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
     encoder.draw(count);
   });
 }
-function EncoderEndEncoding(encoder: MTLRenderCommandEncoder) {
-  encoder.queueTask(async (encoder, commandEncoder, device) => {
-    encoder.end();
-    device.queue.submit([commandEncoder.finish()]);
-  });
-}
 
 
 
@@ -872,22 +951,38 @@ function EncoderSetComputeBytes(encoder: MTLComputeCommandEncoder, buffer: Array
   console.log('EncoderSetComputeBytes', encoder, buffer, offset, index);
   encoder.setBytes(buffer, index);
 }
+function EncoderSetComputeBuffer(encoder: MTLComputeCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
+  console.log('EncoderSetComputeBuffer', encoder, buffer, offset, index);
+  buffer.getImpl().ensureGpuBuffer();
+  encoder.setBytes(buffer, index);
+}
 function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: number) {
   console.log('EncoderDispatchWorkgroups', encoder, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
-    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|undefined>) => {
+    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|BopArray<unknown>|undefined>) => {
       const bindGroupEntries: GPUBindGroupEntry[] = [];
       for (let index = 0; index < buffers.length; ++index) {
         const byteArray = buffers[index];
-        if (!byteArray) {
-          continue;
+        let bufferBuffer;
+        if (byteArray instanceof BopArray) {
+          bufferBuffer = byteArray.getImpl().getGpuBuffer();
+          if (!bufferBuffer) {
+            console.log("missing!!!", "byteArray.getImpl().getGpuBuffer();");
+            continue;
+          }
+        } else {
+          if (!byteArray) {
+            continue;
+          }
+          // TODO: Pool allocate TMP buffer.
+          bufferBuffer = device.createBuffer({
+            size: byteArray.byteLength,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
+          });
+          device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
+          console.log("EncoderDispatchWorkgroups", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
         }
-        const bufferBuffer = device.createBuffer({
-          size: byteArray.byteLength,
-          usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
-        });
-        device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
 
         const bindGroupEntry: GPUBindGroupEntry = {
           binding: index,
@@ -910,69 +1005,19 @@ function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: num
 
 
 
+function EncoderEndEncoding(encoder: MTLRenderCommandEncoder|MTLComputeCommandEncoder) {
+  encoder.queueTask(async (encoder, commandEncoder, device) => {
+    encoder.end();
+    device.queue.submit([commandEncoder.finish()]);
+    return { finishedEncoding: true };
+  });
+}
+
+async function WaitForInternalsReady() {
+  await SharedMTLInternals().ready;
+}
 
 
-
-// let v_3_DrawTriangle = MakeMTLRenderPassDescriptor();
-// v_3_DrawTriangle.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
-// v_3_DrawTriangle.colorAttachments[0].loadAction = MTLLoadActionClear;
-// v_3_DrawTriangle.colorAttachments[0].storeAction = MTLStoreActionStore;
-
-
-// let v_0_DrawTriangle = MTLLibraryNewFunctionWithName("F2_vertexShader");
-// let v_1_DrawTriangle = MTLLibraryNewFunctionWithName("F3_fragmentShader");
-// let v_2_DrawTriangle = MakeMTLRenderPipelineDescriptor();
-// v_2_DrawTriangle.label = "RenderPrimitives";
-// v_2_DrawTriangle.vertexFunction = v_0_DrawTriangle;
-// v_2_DrawTriangle.fragmentFunction = v_1_DrawTriangle;
-// v_2_DrawTriangle.colorAttachments[0].pixelFormat = MTLPixelFormatBGRA8Unorm_sRGB;
-// v_2_DrawTriangle.colorAttachments[0].blendingEnabled = true;
-// v_2_DrawTriangle.colorAttachments[0].alphaBlendOperation = MTLBlendOperationAdd;
-// v_2_DrawTriangle.colorAttachments[0].rgbBlendOperation = MTLBlendOperationAdd;
-// v_2_DrawTriangle.colorAttachments[0].destinationAlphaBlendFactor = MTLBlendFactorOne;
-// v_2_DrawTriangle.colorAttachments[0].destinationRGBBlendFactor = MTLBlendFactorOne;
-// v_2_DrawTriangle.colorAttachments[0].sourceAlphaBlendFactor = MTLBlendFactorOne;
-// v_2_DrawTriangle.colorAttachments[0].sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
-// f_0_DrawTriangle_pipeline = MTLNewRenderPipelineStateWithDescriptor(v_2_DrawTriangle);
-// let v_3_DrawTriangle = MakeMTLRenderPassDescriptor();
-// v_3_DrawTriangle.colorAttachments[0].clearColor = MTLClearColorMake(0, 0, 0, 0);
-// v_3_DrawTriangle.colorAttachments[0].loadAction = MTLLoadActionClear;
-// v_3_DrawTriangle.colorAttachments[0].storeAction = MTLStoreActionStore;
-// f_1_DrawTriangle_renderPassDescriptor = v_3_DrawTriangle;
-
-
-
-// const BopLib = {
-//   float4: {
-//     constructor(x: number, y: number, z: number, w: number) {
-//       return [x, y, z, w];
-//     },
-//   },
-//   Array: {
-//   },
-// };
-
-// function MTLLibraryNewFunctionWithName(shaderName):  {
-//   return {};
-// }
-
-// function MakeMTLRenderPipelineDescriptor() {
-//   return {
-//     label: 'Unnamed Pipeline',
-//     vertexFunction: undefined,
-//     fragmentFunction: undefined,
-//     colorAttachments: [
-//       {
-//         pixelFormat: undefined,
-//         blendingEndabled: undefined,
-//         alphaBlendOperation: undefined,
-//         rgbBlendOperation: undefined,
-//         destinationAlphaBlendFactor: undefined,
-//         sourceAlphaBlendFactor: undefined,
-//       },
-//     ],
-//   };
-// }
 
 let init = false;
 let __EVAL = (s: string, frozen?: boolean) => eval(`if (!frozen) { void (__EVAL = ${__EVAL}); } ${s}`);

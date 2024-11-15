@@ -173,10 +173,15 @@ export class BopProcessor {
     evalJavascriptInContext(`
 const instanceVars = {};
 ` + cpuCode + `
-// F8_DrawTriangle_prepare();
-F8_computeShader_prepare();
-F6_drawTriangle();
-// F1_drawTriangle();
+(async () => {
+  await WaitForInternalsReady();
+  F8_computeShader_prepare();
+  F10_vertexShader_fragmentShader_prepare();
+  // F8_vertexShader_fragmentShader_prepare();
+  // F8_computeShader_prepare();
+  F6_drawTriangle();
+  // F1_drawTriangle();
+})();
 `);
 
     // (async () => {
@@ -613,12 +618,12 @@ F6_drawTriangle();
           this.asAssignableRef = oldAsAssignableRef;
 
           const ret = this.blockWriter.writeAssignmentStatement();
-          // if (refVar.requiresDirectAccess) {
+          if (refVar.requiresDirectAccess) {
             // HACK!!! ???
             ret.ref.writeDereferenceExpr().value.writeVariableReferenceReference(ref);
-          // } else {
-          //   ret.ref.writeVariableDereference(ref);
-          // }
+          } else {
+            ret.ref.writeVariableDereference(ref);
+          }
           ret.value.writeVariableReference(value);
           return { expressionResult: valueRef };
         },
@@ -799,6 +804,7 @@ F6_drawTriangle();
 
           let outBopVar;
           if (isDirectAccess) {
+            console.log(propertyRef.resolvedRef);
             outBopVar = propertyRef.resolvedRef;
           } else {
             const propAccessor = propertyRef.resolvedRef.propertyResult;
@@ -819,7 +825,14 @@ F6_drawTriangle();
               const [outVar, outTmpBopVar] = allocTmpOut(outType, outBopType, node.name.text);
               outBopVar = outTmpBopVar;
               const ret = this.blockWriter.writeVariableDeclaration(outVar);
-              ret.initializer.writeExpression().writePropertyAccess(propVar.identifierToken).source.writeVariableReference(fromVar);
+              const accessExpr = ret.initializer.writeExpression();
+              let sourceExpr;
+              if (fromBopVar.requiresDirectAccess) {
+                sourceExpr = accessExpr.writePropertyReferenceAccess(propVar.identifierToken).source;
+              } else {
+                sourceExpr = accessExpr.writePropertyAccess(propVar.identifierToken).source;
+              }
+              sourceExpr.writeVariableReference(fromVar);
             } else {
               this.logAssert(`Property ${propertyRef.identifier} is undefined.`);
               return;
@@ -854,6 +867,7 @@ F6_drawTriangle();
           const indexAccess = this.blockWriter.writeVariableDeclaration(accessVar).initializer.writeExpression().writeIndexAccess();
           indexAccess.source.writeVariableReference(fromBopVar.result!);
           indexAccess.index.writeVariableReference(indexBopVar.result!);
+          accessBopVar.requiresDirectAccess = isDirectAccess;
           return {
             expressionResult: accessBopVar,
           };
@@ -1377,7 +1391,6 @@ F6_drawTriangle();
     const signatureArgTypes = functionSignature instanceof Array ? functionSignature :
         functionSignature.parameters.map(t => this.resolveType(this.tc.getTypeOfSymbol(t)));
     for (const overload of overloads) {
-      console.log(overload.args);
       if (overload.args.length !== signatureArgTypes.length) {
         continue;
       }
@@ -1633,7 +1646,11 @@ F6_drawTriangle();
         }
         const funcCall = callExprWriter.writeStaticFunctionCall(functionRef.result!.identifierToken, { overloadIndex: functionOf.overloadIndex });
         if (functionOf.isMethod) {
-          funcCall.addArg().writeVariableReference(thisRef!.result!);
+          if (thisRef!.requiresDirectAccess) {
+            funcCall.addArg().writeVariableReferenceReference(thisRef!.result!);
+          } else {
+            funcCall.addArg().writeVariableReference(thisRef!.result!);
+          }
         }
         for (const argVar of argVars) {
           funcCall.addArg().writeVariableReference(argVar);
@@ -2003,7 +2020,6 @@ F6_drawTriangle();
       }
 
       const structureKey = this.toStructureKey(fields);
-      console.log(structureKey);
 
       let existingTypeInfo = this.typeCoalesceMap.get(structureKey);
       let fieldIdentifierMap: Map<string, { fieldVar: CodeVariable, fieldType: BopType }>;
@@ -2027,6 +2043,18 @@ F6_drawTriangle();
           structWriter.writeField(fieldIdentifier.identifierToken, property.type.tempType);
           fieldIdentifierMap.set(property.identifier, { fieldVar: fieldIdentifier, fieldType: property.type });
         }
+        structWriter.writeStaticConstant(this.writer.makeInternalToken('marshalBytesInto'), CodeTypeSpec.functionType, () => {
+          return structOf.marshalFunc;
+        });
+        structWriter.writeStaticConstant(this.writer.makeInternalToken('marshalByteStride'), CodeTypeSpec.functionType, () => {
+          if (structOf.marshalLength === undefined) {
+            return;
+          }
+          const value = structOf.marshalLength;
+          return (expr: CodeExpressionWriter) => {
+            expr.writeLiteralInt(value);
+          };
+        });
 
         for (const methodDecl of methodDecls) {
           methodFuncs.push(() => {

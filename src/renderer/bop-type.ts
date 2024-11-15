@@ -42,6 +42,9 @@ export class BopFunctionType {
 }
 
 export class BopStructType {
+  public marshalFunc?: CodeVariable;
+  public marshalLength?: number;
+
   public constructor(
     readonly fields: BopVariable[]
   ) {}

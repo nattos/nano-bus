@@ -431,6 +431,10 @@ export class CodeGlobalWriter implements CodeWriterFragment {
         stream.writeToken('}');
         stream.flushLine();
 
+        if (result.body.hasStaticConstants) {
+          result.body.staticConstantsWriterFunc(stream, context);
+        }
+
         if (result.touchedByGpu) {
           stream.writeToken('static');
           stream.writeWhitespace();
@@ -661,7 +665,9 @@ export interface CodeAttributeDecl {
 
 export class CodeStructBodyWriter implements CodeWriterFragment {
   private fieldWriterFuncs: CodeWriterFunc[] = [];
+  private staticConstantsWriterFuncs: CodeWriterFunc[] = [];
   readonly fields: { identifier: CodeNamedToken, typeSpec: CodeTypeSpec }[] = [];
+  readonly staticConstants: { identifier: CodeNamedToken, typeSpec: CodeTypeSpec, reference: CodeVariable }[] = [];
 
   get fieldCount() { return this.fieldWriterFuncs.length; }
 
@@ -672,6 +678,16 @@ export class CodeStructBodyWriter implements CodeWriterFragment {
   get writerFunc(): CodeWriterFunc {
     return (stream, context) => {
       this.fieldWriterFuncs.forEach(makeInvokeCodeWriterFuncHelper(stream, context));
+    };
+  }
+
+  get hasStaticConstants() {
+    return this.staticConstantsWriterFuncs.length > 0;
+  }
+
+  get staticConstantsWriterFunc(): CodeWriterFunc {
+    return (stream, context) => {
+      this.staticConstantsWriterFuncs.forEach(makeInvokeCodeWriterFuncHelper(stream, context));
     };
   }
 
@@ -696,6 +712,51 @@ export class CodeStructBodyWriter implements CodeWriterFragment {
         stream.writeTypeSpec(typeSpec);
         stream.writeWhitespace();
         stream.writeToken(identifier);
+        stream.writeToken(';');
+        stream.flushLine();
+      }
+    });
+  }
+
+  writeStaticConstant(
+      identifier: CodeNamedToken,
+      typeSpec: CodeTypeSpec,
+      reference: CodeVariable|(() => CodeVariable|((expr: CodeExpressionWriter) => void)|undefined),
+  ) {
+    this.staticConstantsWriterFuncs.push((stream, context) => {
+      let innerWriter: CodeWriterFunc|undefined;
+      if (typeof reference === 'function') {
+        const innerRef = reference();
+        if (innerRef === undefined) {
+          return;
+        }
+        if(typeof innerRef === 'function') {
+          const innerExpr = new CodeExpressionWriter();
+          innerRef(innerExpr);
+          innerWriter = (stream, context) => {
+            innerExpr.writerFunc(stream, context);
+          };
+        } else {
+          innerWriter = (stream, context) => {
+            stream.writeToken(innerRef.identifierToken);
+          };
+        }
+      } else {
+        innerWriter = (stream, context) => {
+          stream.writeToken(reference.identifierToken);
+        };
+      }
+      if (!innerWriter) {
+        return;
+      }
+      if (context.platform === CodeWriterPlatform.WebGPU && !context.isGpu) {
+        stream.writeToken('static');
+        stream.writeWhitespace();
+        stream.writeToken(identifier);
+        stream.writeWhitespace();
+        stream.writeToken('=');
+        stream.writeWhitespace();
+        innerWriter(stream, context);
         stream.writeToken(';');
         stream.flushLine();
       }
@@ -1189,6 +1250,24 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
       result.source.writerFunc(stream, context);
       stream.writeToken('.');
       stream.writeToken(propertyName);
+    });
+    return result;
+  }
+  writePropertyReferenceAccess(propertyName: CodeNamedToken): { source: CodeExpressionWriter } {
+    const result = {
+      source: new CodeExpressionWriter(),
+    };
+    this.setWriter((stream, context) => {
+      if (context.platform === CodeWriterPlatform.WebGPU && context.isGpu) {
+        stream.writeToken('&');
+        stream.writeToken('(');
+      }
+      result.source.writerFunc(stream, context);
+      stream.writeToken('.');
+      stream.writeToken(propertyName);
+      if (context.platform === CodeWriterPlatform.WebGPU && context.isGpu) {
+        stream.writeToken(')');
+      }
     });
     return result;
   }
