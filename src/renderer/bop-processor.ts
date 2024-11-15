@@ -72,6 +72,7 @@ export class BopProcessor {
     this.instanceScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
     const instanceVarsTypeIdentifier = this.writer.makeInternalToken('InstanceVars');
     this.instanceBlockWriter = this.writer.global.writeStruct(instanceVarsTypeIdentifier);
+    this.instanceBlockWriter.isInternalOnly = true;
     this.instanceBlockWriter.touchedByGpu = false;
     const instanceVarsToken = this.writer.makeInternalToken('instanceVars');
     this.instanceVarsIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(instanceVarsTypeIdentifier), BopIdentifierPrefix.Local, 'instanceVars', { fixedIdentifierToken: instanceVarsToken });

@@ -393,6 +393,7 @@ export class CodeGlobalWriter implements CodeWriterFragment {
       touchedByGpu: true,
       touchedByCpu: true,
       touchedByProxy: undefined,
+      isInternalOnly: false,
     };
     this.typeIdentifiers.push(identifier);
     this.typeWriters.push((stream, context) => {
@@ -479,6 +480,16 @@ export class CodeGlobalWriter implements CodeWriterFragment {
           stream.writeToken('=');
           stream.writeWhitespace();
           stream.writeToken(fieldIdentifier);
+          if (!result.isInternalOnly) {
+            stream.writeWhitespace();
+            stream.writeToken('??');
+            stream.writeWhitespace();
+            stream.writeTypeSpec(fieldTypeSpec);
+            stream.writeToken('.');
+            stream.writeToken('constructor');
+            stream.writeToken('(');
+            stream.writeToken(')');
+          }
           stream.writeToken(';');
           stream.flushLine();
         }
@@ -552,6 +563,7 @@ export interface CodeStructWriter {
     get touchedByGpu(): boolean;
     get touchedByCpu(): boolean;
   };
+  isInternalOnly: boolean;
 }
 
 export enum CodeAttributeKey {
@@ -1236,10 +1248,12 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
         //  && context.platform === CodeWriterPlatform.WebGPU && context.isGpu
         // TODO: Do we need to walk up the scope?
         const r = ref.group.scope.referenceExprs.find(r => r.identifier === ref.identifierToken);
-        r?.writerFunc(stream, context);
-      } else {
-        stream.writeToken(ref.identifierToken);
+        if (r) {
+          r.writerFunc(stream, context);
+          return;
+        }
       }
+      stream.writeToken(ref.identifierToken);
     });
   }
   writePropertyAccess(propertyName: CodeNamedToken): { source: CodeExpressionWriter } {
@@ -1275,6 +1289,17 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
     this.setWriter((stream, context) => {
       if (context.platform === CodeWriterPlatform.WebGPU && context.isGpu) {
         stream.writeToken('&');
+        if (ref instanceof CodeVariable) {
+          const r = ref.group.scope.referenceExprs.find(r => r.identifier === ref.identifierToken);
+          if (r) {
+            stream.writeToken('(');
+            r?.writerFunc(stream, context);
+            stream.writeToken(')');
+            return;
+          }
+        }
+      }
+      if (context.platform === CodeWriterPlatform.WebGPU && !context.isGpu) {
         if (ref instanceof CodeVariable) {
           const r = ref.group.scope.referenceExprs.find(r => r.identifier === ref.identifierToken);
           if (r) {

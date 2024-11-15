@@ -685,13 +685,16 @@ function drawTriangle() {
   //   return color;
   // }
 
-  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
+  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(0);
   // positions.push({ position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) });
   // positions.push({ position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) });
   // positions.push({ position: new float4(1, 1.1, 0, 1), color: new float4(1, 1, 1, 1) });
   positions.push({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
   positions.push({ position: new float4(1, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
   positions.push({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
   // positions[0].position.x = 0.4;
   // positions[1].position.x = 0.9;
   // const positions = generateTriangleVertices(10);

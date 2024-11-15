@@ -123,15 +123,25 @@ class BopArrayImpl<T> {
   private gpuVertexDirty = false;
   private gpuVertexBuffer?: GPUBuffer;
 
-  constructor(readonly elementType: BopClass|undefined, readonly capacity: number) {
-    // const value: T = new (elementType as any)();
+  constructor(readonly elementType: BopClass|undefined, capacity: number) {
     this.buffer = new Array<T>(capacity);
+    for (let i = 0; i < capacity; ++i) {
+      const value: T = new (elementType as any)();
+      this.buffer[i] = value;
+    }
+    this.length = capacity;
   }
 
   at(i: number) {
     return this.buffer[i];
   }
   set(i: number, value: T) {
+    if (i >= this.length) {
+      for (let insertIndex = this.length; insertIndex < i; ++insertIndex) {
+        this.buffer[insertIndex] = new (this.elementType as any)();
+      }
+      this.length = i + 1;
+    }
     this.buffer[i] = value;
     this.markCpuWrite();
   }
