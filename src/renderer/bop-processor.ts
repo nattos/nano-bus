@@ -805,7 +805,6 @@ const instanceVars = {};
 
           let outBopVar;
           if (isDirectAccess) {
-            console.log(propertyRef.resolvedRef);
             outBopVar = propertyRef.resolvedRef;
           } else {
             const propAccessor = propertyRef.resolvedRef.propertyResult;
@@ -818,6 +817,7 @@ const instanceVars = {};
               }
               this.doProduceResult(callBop);
               const result = this.readResult(callBop);
+              result.requiresDirectAccess = fromBopVar.requiresDirectAccess;
               return {
                 expressionResult: result,
                 thisResult: fromBopVar,
@@ -826,7 +826,10 @@ const instanceVars = {};
               const [outVar, outTmpBopVar] = allocTmpOut(outType, outBopType, node.name.text);
               outBopVar = outTmpBopVar;
               const ret = this.blockWriter.writeVariableDeclaration(outVar);
-              const accessExpr = ret.initializer.writeExpression();
+              let accessExpr = ret.initializer.writeExpression();
+              if (fromBopVar.requiresDirectAccess) {
+                accessExpr = accessExpr.writeDereferenceExpr().value;
+              }
               let sourceExpr;
               if (fromBopVar.requiresDirectAccess) {
                 sourceExpr = accessExpr.writePropertyReferenceAccess(propVar.identifierToken).source;
@@ -838,6 +841,7 @@ const instanceVars = {};
               this.logAssert(`Property ${propertyRef.identifier} is undefined.`);
               return;
             }
+            outBopVar.requiresDirectAccess = fromBopVar.requiresDirectAccess;
           }
           return {
             expressionResult: outBopVar,
@@ -1645,7 +1649,7 @@ const instanceVars = {};
           const ret = this.blockWriter.writeVariableDeclaration(outVar);
           callExprWriter = ret.initializer.writeExpression();
         }
-        const funcCall = callExprWriter.writeStaticFunctionCall(functionRef.result!.identifierToken, { overloadIndex: functionOf.overloadIndex });
+        const funcCall = callExprWriter.writeStaticFunctionCall(functionRef.result!.identifierToken, { overloadIndex: functionOf.overloadIndex, requiresDirectAccess: thisRef?.requiresDirectAccess });
         if (functionOf.isMethod) {
           if (thisRef!.requiresDirectAccess) {
             funcCall.addArg().writeVariableReferenceReference(thisRef!.result!);

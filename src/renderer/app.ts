@@ -116,11 +116,22 @@ struct F3_TRAMPOLINE_fragmentShader_out {
 @group(0) @binding(3) var<storage, read_write> b5: array<f32>;
 @group(0) @binding(4) var<uniform> b6: s63__placeholder_number_;
 
+fn something(p: ptr<function, f32>) {
+  *p = 32;
+}
+
+fn something2(p: ptr<storage, f32, read_write>) {
+  *p = 32;
+}
+
 @fragment
 fn F3_TRAMPOLINE_fragmentShader(
     vin: F2_TRAMPOLINE_vertexShader_out,
     @location(1) v1: f32,
 ) -> F3_TRAMPOLINE_fragmentShader_out {
+  var v = 32.0;
+  something2(&b5[3]);
+  something(&v);
   // _ = &b2;
   // _ = &b3;
   // _ = &b4;

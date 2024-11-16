@@ -11,6 +11,10 @@ fn BopLib_float4_set_x(t: ptr<function, vec4f>, v: f32) { t.x = v; }
 fn BopLib_float4_set_y(t: ptr<function, vec4f>, v: f32) { t.y = v; }
 fn BopLib_float4_set_z(t: ptr<function, vec4f>, v: f32) { t.z = v; }
 fn BopLib_float4_set_w(t: ptr<function, vec4f>, v: f32) { t.w = v; }
+fn BopLib_float4_set_x_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.x = v; }
+fn BopLib_float4_set_y_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.y = v; }
+fn BopLib_float4_set_z_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.z = v; }
+fn BopLib_float4_set_w_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.w = v; }
 
 fn BopLib_float4_operatorAdd(lhs: vec4f, rhs: vec4f) -> vec4f { return vec4f(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z, lhs.w + rhs.w); }
 fn BopLib_float4_operatorAdd1(lhs: f32, rhs: vec4f) -> vec4f { return vec4f(lhs + rhs.x, lhs + rhs.y, lhs + rhs.z, lhs + rhs.w); }

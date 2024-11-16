@@ -1417,7 +1417,7 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
     });
     return result;
   }
-  writeStaticFunctionCall(funcIdentifier: CodeNamedToken, options?: { overloadIndex?: number }): {
+  writeStaticFunctionCall(funcIdentifier: CodeNamedToken, options?: { overloadIndex?: number, requiresDirectAccess?: boolean }): {
     addArg(): CodeExpressionWriter,
     addTemplateArg(value: CodeTypeSpec): void,
     externCallSemantics: boolean,
@@ -1438,8 +1438,15 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
     this.setWriter((stream, context) => {
       stream.writeToken(funcIdentifier);
       const overloadIndex = options?.overloadIndex ?? 0;
-      if (context.platform === CodeWriterPlatform.WebGPU && context.isGpu && overloadIndex > 0) {
-        stream.writeToken(CodeExpressionWriter.formatLiteralIntToken(overloadIndex));
+      const requiresDirectAccess = options?.requiresDirectAccess ?? false;
+      if (context.platform === CodeWriterPlatform.WebGPU && context.isGpu) {
+        if (overloadIndex > 0) {
+          stream.writeToken(CodeExpressionWriter.formatLiteralIntToken(overloadIndex));
+        }
+        if (requiresDirectAccess) {
+          stream.writeToken('_');
+          stream.writeToken('storage');
+        }
       }
       if (!(context.platform === CodeWriterPlatform.WebGPU && !context.isGpu) &&
           typeArgs.length > 0) {
