@@ -1241,8 +1241,8 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
     return result;
   }
 
-  writeVariableReference(ref: CodeVariable) {
-    const isRef = ref.typeSpec.isReference;
+  writeVariableReference(ref: CodeVariable|CodeNamedToken) {
+    const isRef = ref instanceof CodeVariable && ref.typeSpec.isReference;
     this.setWriter((stream, context) => {
       if (isRef) {
         //  && context.platform === CodeWriterPlatform.WebGPU && context.isGpu
@@ -1253,7 +1253,8 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
           return;
         }
       }
-      stream.writeToken(ref.identifierToken);
+      const identifierToken = ref instanceof CodeVariable ? ref.identifierToken : ref;
+      stream.writeToken(identifierToken);
     });
   }
   writePropertyAccess(propertyName: CodeNamedToken): { source: CodeExpressionWriter } {

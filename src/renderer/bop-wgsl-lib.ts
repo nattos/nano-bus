@@ -30,4 +30,26 @@ fn BopLib_float4_operatorDivide1(lhs: f32, rhs: vec4f) -> vec4f { return vec4f(l
 fn BopLib_float4_operatorDivide2(lhs: vec4f, rhs: f32) -> vec4f { return vec4f(lhs.x / rhs, lhs.y / rhs, lhs.z / rhs, lhs.w / rhs); }
 fn BopLib_float4_operatorNegate(lhs: vec4f) -> vec4f { return vec4f(-lhs.x, -lhs.y, -lhs.z, -lhs.w); }
 
+struct BopLib_DebugOuts_MetadataType {
+  viewportStartLine: i32,
+  viewportEndLine: i32,
+};
+struct BopLib_DebugOuts_Entry {
+  length: i32,
+  values: array<f32, 4>,
+};
+
+@group(2) @binding(0) var<storage, read> BopLib_DebugIns_ValuesArray: array<f32>;
+@group(2) @binding(1) var<uniform> BopLib_DebugOuts_Metadata: BopLib_DebugOuts_MetadataType;
+@group(2) @binding(2) var<storage, read_write> BopLib_DebugOuts_ValuesArray: array<BopLib_DebugOuts_Entry>;
+
+fn BopLib_exportDebugOut(lineNumber: i32, length: i32, v0: f32, v1: f32, v2: f32, v3: f32) {
+  if (lineNumber < BopLib_DebugOuts_Metadata.viewportStartLine ||
+      lineNumber >= BopLib_DebugOuts_Metadata.viewportEndLine) {
+    return;
+  }
+  var values = array<f32, 4>(v0, v1, v2, v3);
+  BopLib_DebugOuts_ValuesArray[lineNumber - BopLib_DebugOuts_Metadata.viewportStartLine] = BopLib_DebugOuts_Entry(length, values);
+}
+
 `;

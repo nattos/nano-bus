@@ -4,6 +4,10 @@ import { CodeVariable, CodeTypeSpec, CodeScopeType, CodeNamedToken } from "./cod
 export interface BopResult {
   expressionResult?: BopVariable;
   thisResult?: BopVariable;
+  exportDebugOut?: {
+    lineNumber: number;
+    overrideResult?: BopVariable;
+  };
 }
 
 export interface BopStage {
@@ -13,7 +17,7 @@ export interface BopStage {
   resolveStorage?(): void;
   produceResult?(): BopResult|undefined;
 
-  getAuxTypeInference?(): BopAuxTypeInference;
+  getAuxTypeInference?(): BopAuxTypeInference|undefined;
 
   isAssignableRef?: boolean;
   resolvedIdentifiers?: boolean;

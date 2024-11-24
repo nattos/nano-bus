@@ -666,7 +666,7 @@ function computeShader(threadId: int, options: { positions: TriangleVertex[] }) 
   const p = positions[2];
   p.color.x = p.color.x + 1;
   positions[2] = p;
-  // positions[2].color.x = positions[2].color.x + 1;
+  positions[2].color.x = positions[2].color.x + 1;
 }
 
 @vertexShader

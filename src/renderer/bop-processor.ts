@@ -176,12 +176,14 @@ const instanceVars = {};
 ` + cpuCode + `
 (async () => {
   await WaitForInternalsReady();
+  InternalMarkFrameStart();
   F8_computeShader_prepare();
   F10_vertexShader_fragmentShader_prepare();
   // F8_vertexShader_fragmentShader_prepare();
   // F8_computeShader_prepare();
   F6_drawTriangle();
   // F1_drawTriangle();
+  InternalMarkFrameEnd();
 })();
 `);
 
@@ -524,6 +526,15 @@ const instanceVars = {};
   };
 
 
+  private readonly debugOutMap = new Map<number, { lineNumber: number, result: BopStage|BopVariable }>();
+  private readonly debugInMap = new Map<number, { lineNumber: number, bopVar: BopVariable }>();
+
+  private addDebugOut(lineNumber: number, result: BopStage|BopVariable) {
+    this.debugOutMap.set(lineNumber, { lineNumber, result });
+  }
+  private addDebugIn(lineNumber: number, bopVar: BopVariable) {
+  }
+
   private visitBlockGenerator(node: ts.Node): BopStage|undefined {
     const sourceMapRange = ts.getSourceMapRange(node);
     console.log(`${tsGetSyntaxTypeLabel(node.kind)}   inner code: ${(sourceMapRange.source ?? this.sourceRoot).text.substring(sourceMapRange.pos, sourceMapRange.end).trim()}`);
@@ -545,7 +556,21 @@ const instanceVars = {};
       node.statements.forEach(this.visitChild.bind(this));
       return {};
     } else if (ts.isExpressionStatement(node)) {
-      return this.delegateToChild(node.expression);
+      const exprResult = this.delegateToChild(node.expression);
+      const innerProduceResult = exprResult.produceResult;
+      if (innerProduceResult) {
+        exprResult.produceResult = () => {
+          const innerResult = innerProduceResult();
+          if (innerResult) {
+            innerResult.exportDebugOut ??= {
+              lineNumber: this.getNodeLineNumber(node),
+            };
+          }
+          return innerResult;
+        };
+      }
+      this.addDebugOut(node.getStart(), exprResult);
+      return exprResult;
     } else if (ts.isVariableStatement(node) || ts.isVariableDeclarationList(node)) {
       const declarations = ts.isVariableDeclarationList(node) ? node.declarations : node.declarationList.declarations;
       const newVars = declarations.map(decl => {
@@ -553,6 +578,7 @@ const instanceVars = {};
         const valueAuxType = initializer?.getAuxTypeInference?.();
         const varType = valueAuxType?.bopType ?? this.resolveType(this.tc.getTypeAtLocation(decl));
         const newVar = this.block.mapTempIdentifier(decl.name.getText(), varType);
+        this.addDebugIn(node.getStart(), newVar);
         return {
           variable: newVar,
           initializer: initializer,
@@ -563,9 +589,11 @@ const instanceVars = {};
 
       return {
         produceResult: () => {
+          let debugOutResult: BopVariable|undefined;
           for (const newVar of newVars) {
             if (newVar.initializer) {
               const newVarResult = this.readResult(newVar.initializer);
+              debugOutResult ??= newVarResult;
               if (newVarResult.requiresDirectAccess) {
                 newVar.variable.result = newVarResult.result;
                 newVar.variable.requiresDirectAccess = true;
@@ -580,7 +608,12 @@ const instanceVars = {};
               }
             }
           }
-          return {};
+          return {
+            exportDebugOut: {
+              lineNumber: this.getNodeLineNumber(node),
+              overrideResult: debugOutResult,
+            },
+          };
         },
       };
     } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
@@ -1794,6 +1827,49 @@ const instanceVars = {};
     const result = stage.produceResult?.();
     if (result?.expressionResult) {
       this.resultMap.set(stage, result);
+      if (result.exportDebugOut) {
+        console.log('exportDebugOut', result.exportDebugOut, result.exportDebugOut.overrideResult ?? result.expressionResult, tsGetSyntaxTypeLabel(stage.debugInfo?.sourceNode?.kind), stage.debugInfo?.sourceCode);
+        const exportBopVar = result.exportDebugOut.overrideResult ?? result.expressionResult;
+        const exportVar = exportBopVar.result;
+        if (exportVar && exportBopVar) {
+          let getters: Array<(expr: CodeExpressionWriter) => void>|undefined;
+          switch (exportBopVar.bopType) {
+            case this.intType:
+              getters = [
+                (expr) => expr.writeCast(this.floatType.tempType).source.writeVariableReference(exportVar),
+              ];
+              break;
+            case this.floatType:
+              getters = [
+                (expr) => expr.writeVariableReference(exportVar),
+              ];
+              break;
+            case this.float4Type:
+              getters = [
+                (expr) => expr.writePropertyAccess(this.writer.makeInternalToken('x')).source.writeVariableReference(exportVar),
+                (expr) => expr.writePropertyAccess(this.writer.makeInternalToken('y')).source.writeVariableReference(exportVar),
+                (expr) => expr.writePropertyAccess(this.writer.makeInternalToken('z')).source.writeVariableReference(exportVar),
+                (expr) => expr.writePropertyAccess(this.writer.makeInternalToken('w')).source.writeVariableReference(exportVar),
+              ];
+              break;
+          }
+          if (getters) {
+            const funcCall = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken('BopLib::exportDebugOut'));
+            funcCall.addArg().writeLiteralInt(result.exportDebugOut.lineNumber);
+            let valueCount = Math.max(0, Math.min(4, getters.length));
+            funcCall.addArg().writeLiteralInt(valueCount);
+            for (let valueIndex = 0; valueIndex < valueCount; ++valueIndex) {
+              const getter = getters[valueIndex];
+              const argValue = funcCall.addArg();
+              getter(argValue);
+            }
+            for (let valueIndex = valueCount; valueIndex < 4; ++valueIndex) {
+              const argValue = funcCall.addArg();
+              argValue.writeLiteralFloat(0.0);
+            }
+          }
+        }
+      }
     }
   }
 
@@ -2232,6 +2308,10 @@ const instanceVars = {};
       return `{${type.getProperties().map(p => `${p.name}:${this.getSymbolType(p)}`).join(',')}}`;
     }
     return type.symbol?.name ?? ((type as any)?.intrinsicName) ?? '';
+  }
+
+  private getNodeLineNumber(node: ts.Node) {
+    return ts.getLineAndCharacterOfPosition(this.sourceRoot, node.getStart()).line;
   }
 
   private printRec(node: ts.Node) {

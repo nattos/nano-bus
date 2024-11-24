@@ -64,8 +64,6 @@ export interface GpuFixedBinding extends GpuBindingBase {
 export interface GpuArrayBinding extends GpuBindingBase {
   type: 'array';
   userType: BopType;
-  elementMarshalBinding: GpuFixedBinding;
-  writeGetLength(dataVar: CodeVariable, expr: CodeExpressionWriter): void;
   marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable };
 }
 export type GpuBinding = GpuFixedBinding|GpuArrayBinding;
@@ -266,17 +264,6 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
       nameHint: binding.path.at(-1)?.identifier.nameHint ?? 'unknown',
       location: bindings.length,
       userType: binding.userType,
-      elementMarshalBinding: binding.elementBinding,
-      writeGetLength(dataVar: CodeVariable, expr: CodeExpressionWriter): void {
-        let readExprLeaf = expr;
-        readExprLeaf = readExprLeaf.writePropertyAccess(self.writer.makeInternalToken('length')).source;
-        for (let i = binding.path.length - 1; i >= 0; --i) {
-          const pathPart = binding.path[i];
-          const propAccess = readExprLeaf.writePropertyAccess(pathPart.identifier);
-          readExprLeaf = propAccess.source;
-        }
-        readExprLeaf.writeVariableReference(dataVar);
-      },
       marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable } {
         const arrayVar = body.scope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.tempType, BopIdentifierPrefix.Local, `bindArray_${binding.path.at(-1)?.identifier.nameHint}`);
         let readExprLeaf = body.writeVariableDeclaration(arrayVar).initializer.writeExpression();
@@ -460,26 +447,6 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
     innerBlock: vertexStructBlock,
   });
 
-  // const insStructIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${funcName}_ins`);
-  // const insStructWriter = this.writer.global.writeStruct(insStructIdentifier);
-  // // insStructWriter.touchedByGpu = true;
-  // const insStructScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
-  // const insStructBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
-  // // insStructWriter.touchedByGpu = true;
-  // const insStructType = BopType.createPassByValue({
-  //   debugName: `${funcName}_ins`,
-  //   valueType: CodeTypeSpec.fromStruct(insStructIdentifier),
-  //   innerScope: insStructScope,
-  //   innerBlock: insStructBlock,
-  // });
-
-
-
-
-
-
-
-
 
 
   const vertexParamIndex = isGpuComputeFunc ? -1 : 0;
@@ -571,6 +538,24 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
             placeholderAssign.value.writeVariableReferenceReference(uniformVar.identifierToken);
           });
         }
+      }
+      rewriterFuncs.push((funcWriter) => {
+        const placeholderAssign = funcWriter.body.writeAssignmentStatement();
+        placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
+        placeholderAssign.value.writeVariableReferenceReference(this.writer.makeInternalToken('BopLib_DebugIns_ValuesArray'));
+      });
+      rewriterFuncs.push((funcWriter) => {
+        const placeholderAssign = funcWriter.body.writeAssignmentStatement();
+        placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
+        placeholderAssign.value.writeVariableReferenceReference(this.writer.makeInternalToken('BopLib_DebugOuts_Metadata'));
+      });
+      // GRRR webgpu
+      if (!isGpuVertexFunc) {
+        rewriterFuncs.push((funcWriter) => {
+          const placeholderAssign = funcWriter.body.writeAssignmentStatement();
+          placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
+          placeholderAssign.value.writeVariableReferenceReference(this.writer.makeInternalToken('BopLib_DebugOuts_ValuesArray'));
+        });
       }
     }
     paramIndex++;

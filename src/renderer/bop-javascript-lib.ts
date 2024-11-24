@@ -10,6 +10,105 @@ class BopClass {
   marshalBytesInto?(value: any, into: BufferFiller, indexOffset: number): void;
 }
 
+
+function environmentIsLittleEndian(): boolean {
+  return new Uint8Array(new Uint16Array([1]).buffer)[0] === 1;
+}
+
+class BopLibDebugOuts {
+  viewportStart: number = 0;
+  get viewportEnd() {
+    return this.viewportStart + this.viewportSize;
+  }
+  readonly viewportSize = 256;
+  private readonly littleEndian = environmentIsLittleEndian();
+  private bytesBuffer = new ArrayBuffer(this.viewportSize * 4 * 5);
+  private dataView = new DataView(this.bytesBuffer);
+  private intView = new Int32Array(this.bytesBuffer);
+
+  write(lineNumber: number, length: number, v0: number, v1: number, v2: number, v3: number) {
+    if (lineNumber < this.viewportStart || lineNumber >= this.viewportEnd) {
+      return;
+    }
+    const offset = lineNumber * 5;
+    this.dataView.setInt32((offset + 0) * 4, length, this.littleEndian);
+    this.dataView.setFloat32((offset + 1) * 4, v0, this.littleEndian);
+    this.dataView.setFloat32((offset + 2) * 4, v1, this.littleEndian);
+    this.dataView.setFloat32((offset + 3) * 4, v2, this.littleEndian);
+    this.dataView.setFloat32((offset + 4) * 4, v3, this.littleEndian);
+  }
+
+  clear() {
+    this.intView.fill(0);
+  }
+
+  get(lineNumber: number): { values: number[] }|undefined {
+    if (lineNumber < this.viewportStart || lineNumber >= this.viewportEnd) {
+      return;
+    }
+    const offset = lineNumber * 5;
+    const length = Math.min(4, this.dataView.getInt32((offset + 0) * 4, this.littleEndian));
+    const values: number[] = [];
+    for (let i = 0; i < length; ++i) {
+      values.push(this.dataView.getFloat32((offset + i + 1) * 4, this.littleEndian));
+    }
+    return {
+      values: values,
+    };
+  }
+
+  merge(startLineNumber: number, marshaledBytes: ArrayBuffer) {
+    const inViewportSize = marshaledBytes.byteLength / 4 / 5;
+    const thisViewportSize = this.viewportSize;
+
+    const viewportSize = Math.min(inViewportSize, thisViewportSize);
+
+    const inViewportStart = startLineNumber;
+    const inViewportEnd = inViewportStart + viewportSize;
+
+    const thisViewportStart = this.viewportStart;
+    const thisViewportEnd = thisViewportStart + viewportSize;
+
+    const copyStart = Math.max(thisViewportStart, inViewportStart);
+    const copyEnd = Math.min(thisViewportEnd, inViewportEnd);
+    const copyLength = copyEnd - copyStart;
+    if (copyLength <= 0) {
+      return;
+    }
+    const inLineOffset = copyStart - inViewportStart;
+    const thisLineOffset = copyStart - thisViewportStart;
+
+    const inView = new DataView(marshaledBytes);
+
+    console.log(inViewportSize, thisViewportSize, viewportSize, inViewportStart, inViewportEnd, thisViewportStart, thisViewportEnd, copyStart, copyEnd, copyLength);
+
+    for (let i = 0; i < copyLength; ++i) {
+      const inOffset = (inLineOffset + i) * 5;
+      const inValueLength = inView.getInt32((inOffset + 0) * 4, this.littleEndian);
+
+      const thisOffset = (thisLineOffset + i) * 5;
+      const thisValueLength = this.dataView.getFloat32((thisOffset + 0) * 4, this.littleEndian);
+
+      if (inValueLength > thisValueLength) {
+        console.log(inOffset, inValueLength, thisValueLength, i, copyStart + i);
+        this.dataView.setInt32((thisOffset + 0) * 4, inValueLength, this.littleEndian);
+        this.dataView.setFloat32((thisOffset + 1) * 4, inView.getFloat32((inOffset + 1) * 4, this.littleEndian), this.littleEndian);
+        this.dataView.setFloat32((thisOffset + 2) * 4, inView.getFloat32((inOffset + 2) * 4, this.littleEndian), this.littleEndian);
+        this.dataView.setFloat32((thisOffset + 3) * 4, inView.getFloat32((inOffset + 3) * 4, this.littleEndian), this.littleEndian);
+        this.dataView.setFloat32((thisOffset + 4) * 4, inView.getFloat32((inOffset + 4) * 4, this.littleEndian), this.littleEndian);
+      }
+    }
+
+    for (let i = 0; i < 256; ++i) {
+      const line = this.get(i);
+      if (!line || line.values.length === 0) {
+        continue;
+      }
+      console.log(`line: ${i + 1}`, line.values);
+    }
+  }
+}
+
 const BopLib = {
   int: {
     cast(x: number): number {
@@ -19,6 +118,10 @@ const BopLib = {
   float: {
     cast(x: number): number {
       return x;
+    },
+    marshalByteStride: 4,
+    marshalBytesInto(value: number, into: BufferFiller, indexOffset: number): void {
+      into.writeFloat(indexOffset * 4, value);
     },
   },
   float4: {
@@ -95,6 +198,12 @@ const BopLib = {
       return new BopArray<T>(elementType, l);
     },
   },
+
+  debugOuts: new BopLibDebugOuts(),
+
+  exportDebugOut(lineNumber: number, length: number, v0: number, v1: number, v2: number, v3: number) {
+    this.debugOuts.write(lineNumber, length, v0, v1, v2, v3);
+  },
 };
 
 class BopFloat4 {
@@ -104,6 +213,14 @@ class BopFloat4 {
     z: BopLib.float,
     w: BopLib.float,
   };
+
+  static marshalByteStride: number = BopLib.float.marshalByteStride * 4;
+  static marshalBytesInto(value: BopFloat4, into: BufferFiller, indexOffset: number): void {
+    BopLib.float.marshalBytesInto(value.x, into, indexOffset * 4 + 0);
+    BopLib.float.marshalBytesInto(value.y, into, indexOffset * 4 + 1);
+    BopLib.float.marshalBytesInto(value.z, into, indexOffset * 4 + 2);
+    BopLib.float.marshalBytesInto(value.w, into, indexOffset * 4 + 3);
+  }
 
   constructor(
     public x: number,
@@ -288,18 +405,42 @@ export class BufferFiller {
 
 
 
-
 export class MTLInternals {
   readonly ready;
   readonly shadersReady;
   readonly targetReady;
   readonly globalEncoderQueue = new utils.OperationQueue();
 
+  readonly debugOutsViewportSize = 128;
+
   get device() { return this._device; }
   private _device?: GPUDevice;
 
   private readonly shaderCodeProvider = new utils.Resolvable<string>();
   private readonly targetCanvasContextProvider = new utils.Resolvable<GPUCanvasContext>();
+
+  private debugInOuts?: {
+    prepare(): void;
+    readback(): Promise<void>;
+    createDebugInOutsBindGroup(layout: GPUBindGroupLayout): GPUBindGroup;
+  };
+
+  prepareDebugInOuts() {
+    this.globalEncoderQueue.push(async () => {
+      this.debugInOuts?.prepare();
+    });
+  }
+
+  // GRR WebGPU bind group layouts must be exactly the same instance.
+  createDebugInOutsBindGroup(layout: GPUBindGroupLayout): GPUBindGroup {
+    return this.debugInOuts!.createDebugInOutsBindGroup(layout);
+  }
+
+  readbackDebugOuts() {
+    this.debugInOuts?.readback();
+  }
+
+
 
   constructor() {
     const ready = this.ready = (async () => {
@@ -308,6 +449,146 @@ export class MTLInternals {
       this._device = device;
       if (!adapter || !device) {
         console.log('WebGPU initialization failed.');
+      }
+      if (device) {
+        const insValuesProxy = new BopArray(BopFloat4, 100);
+
+        const outsMetadataByteLength = 2 * 4;
+        const outsMetadataCpuBuffer = new ArrayBuffer(outsMetadataByteLength);
+        const outsMetadataGpuBuffer = device.createBuffer({
+          size: outsMetadataByteLength,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
+        });
+
+        const outsValuesArrayByteLength = this.debugOutsViewportSize * 5 * 4;
+        const outsValuesArrayCpuBuffer = new ArrayBuffer(outsValuesArrayByteLength);
+        const outsValuesArrayCpuBufferUint8 = new Uint8Array(outsValuesArrayCpuBuffer);
+        const outsValuesArrayGpuBufferStorage = device.createBuffer({
+          size: outsValuesArrayByteLength,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.STORAGE
+        });
+        const outsValuesArrayGpuBufferReadable = device.createBuffer({
+          size: outsValuesArrayByteLength,
+          usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        });
+
+        let currentInsValuesGpuBuffer: GPUBuffer|undefined;
+        let currentBindGroup: GPUBindGroup|undefined;
+
+        let prepareDebugOutsViewportStart = 0;
+
+        let readbackRunning = false;
+        let readbackQueued = false;
+        const doReadback = async () => {
+          readbackQueued = false;
+          readbackRunning = true;
+          await this.ready;
+          await this.globalEncoderQueue.push(async () => {
+            try {
+              const thisViewportStart = prepareDebugOutsViewportStart;
+              const commandEncoder = device.createCommandEncoder();
+              commandEncoder.copyBufferToBuffer(outsValuesArrayGpuBufferStorage, 0, outsValuesArrayGpuBufferReadable, 0, outsValuesArrayByteLength);
+              device.queue.submit([commandEncoder.finish()]);
+
+              await outsValuesArrayGpuBufferReadable.mapAsync(GPUMapMode.READ, 0, outsValuesArrayByteLength);
+              const readValues = outsValuesArrayGpuBufferReadable.getMappedRange();
+              outsValuesArrayCpuBufferUint8.set(new Uint8Array(readValues));
+              outsValuesArrayGpuBufferReadable.unmap();
+              console.log(new Float32Array(outsValuesArrayCpuBufferUint8.buffer));
+
+              // Merge into CPU view.
+              BopLib.debugOuts.merge(thisViewportStart, outsValuesArrayCpuBuffer);
+            } finally {
+              readbackRunning = false;
+            }
+          });
+          if (readbackQueued) {
+            doReadback();
+          }
+        };
+
+        const createDebugInOutsBindGroup = (insValuesGpuBuffer: GPUBuffer, layout: GPUBindGroupLayout) => {
+          const bindGroupEntries: GPUBindGroupEntry[] = [
+            {
+              binding: 0,
+              resource: {
+                buffer: insValuesGpuBuffer,
+              },
+            },
+            {
+              binding: 1,
+              resource: {
+                buffer: outsMetadataGpuBuffer,
+              }
+            },
+            {
+              binding: 2,
+              resource: {
+                buffer: outsValuesArrayGpuBufferStorage,
+              }
+            },
+          ];
+          return device.createBindGroup({
+            layout: layout,
+            entries: bindGroupEntries,
+          });
+        };
+
+        this.debugInOuts = {
+          prepare: () => {
+            insValuesProxy.getImpl().ensureGpuBuffer();
+            const insValuesGpuBuffer = insValuesProxy.getImpl().getGpuBuffer();
+            if (!insValuesGpuBuffer) {
+              return;
+            }
+
+            if (!currentBindGroup || currentInsValuesGpuBuffer !== insValuesGpuBuffer) {
+              currentInsValuesGpuBuffer = insValuesGpuBuffer;
+              const layout = device.createBindGroupLayout({
+                entries: [
+                  {
+                    binding: 0,
+                    visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: {
+                      type: 'uniform',
+                    },
+                  },
+                  {
+                    binding: 1,
+                    visibility: GPUShaderStage.COMPUTE | GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: {
+                      type: 'uniform',
+                    },
+                  },
+                  {
+                    binding: 2,
+                    visibility: GPUShaderStage.COMPUTE | GPUShaderStage.FRAGMENT,
+                    buffer: {
+                      type: 'storage',
+                    },
+                  },
+                ],
+              });
+              currentBindGroup = createDebugInOutsBindGroup(insValuesGpuBuffer, layout);
+            }
+
+            device.queue.writeBuffer(outsMetadataGpuBuffer, 0, outsMetadataCpuBuffer, 0, outsMetadataCpuBuffer.byteLength);
+            const commandEncoder = device.createCommandEncoder();
+            commandEncoder.clearBuffer(outsValuesArrayGpuBufferStorage);
+            device.queue.submit([commandEncoder.finish()]);
+          },
+          readback: async () => {
+            if (!readbackRunning) {
+              await doReadback();
+            } else {
+              readbackQueued = true;
+            }
+          },
+          createDebugInOutsBindGroup(layout) {
+            const insValuesGpuBuffer = insValuesProxy.getImpl().getGpuBuffer();
+            return createDebugInOutsBindGroup(insValuesGpuBuffer!, layout);
+          },
+        };
       }
       return { adapter, device };
     })();
@@ -695,11 +976,6 @@ class MTLRenderCommandEncoder {
   constructor(readonly renderPassDescriptor: MTLRenderPassDescriptor) {
     this.preready = (async () => {
       const internals = SharedMTLInternals();
-      await this.compileFlag.promise;
-      const { device } = await internals.ready;
-      const { targetTextureViewFunc } = await internals.targetReady;
-      this.renderPipelineState.descriptor.compile();
-      const { renderPipeline } = await this.renderPipelineState.descriptor.ready;
 
       const acquiredGlobalLock = new utils.Resolvable();
       internals.globalEncoderQueue.push(async () => {
@@ -708,6 +984,12 @@ class MTLRenderCommandEncoder {
       });
       await acquiredGlobalLock.promise;
       console.log("MTLRenderCommandEncoder", "acquiredGlobalLock");
+
+      await this.compileFlag.promise;
+      const { device } = await internals.ready;
+      const { targetTextureViewFunc } = await internals.targetReady;
+      this.renderPipelineState.descriptor.compile();
+      const { renderPipeline } = await this.renderPipelineState.descriptor.ready;
 
       const commandEncoder = device?.createCommandEncoder();
       if (commandEncoder) {
@@ -796,11 +1078,6 @@ class MTLComputeCommandEncoder {
   constructor() {
     this.ready = (async () => {
       const internals = SharedMTLInternals();
-      await this.compileFlag.promise;
-      const { device } = await internals.ready;
-      this.pipelineState.descriptor.compile();
-      const { pipeline } = await this.pipelineState.descriptor.ready;
-
       const acquiredGlobalLock = new utils.Resolvable();
       internals.globalEncoderQueue.push(async () => {
         acquiredGlobalLock.resolve(undefined);
@@ -808,6 +1085,11 @@ class MTLComputeCommandEncoder {
       });
       await acquiredGlobalLock.promise;
       console.log("MTLComputeCommandEncoder", "acquiredGlobalLock");
+
+      await this.compileFlag.promise;
+      const { device } = await internals.ready;
+      this.pipelineState.descriptor.compile();
+      const { pipeline } = await this.pipelineState.descriptor.ready;
 
       const commandEncoder = device?.createCommandEncoder();
       if (commandEncoder) {
@@ -890,6 +1172,7 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
   console.log('EncodeDrawPrimitives', encoder, type, offset, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
+    const internals = SharedMTLInternals();
     // Bind vertex attribute buffers.
     for (let index = 0; index < proxyEncoder.vertexAttributeBytes.length; ++index) {
       const buffer = proxyEncoder.vertexAttributeBytes[index]?.getImpl();
@@ -948,6 +1231,7 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
     });
     encoder.setBindGroup(0, vertexBindGroup);
     encoder.setBindGroup(1, fragmentBindGroup);
+    encoder.setBindGroup(2, internals.createDebugInOutsBindGroup(renderPipeline.getBindGroupLayout(2)));
     encoder.draw(count);
   });
 }
@@ -970,6 +1254,7 @@ function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: num
   console.log('EncoderDispatchWorkgroups', encoder, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
+    const internals = SharedMTLInternals();
     const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|BopArray<unknown>|undefined>) => {
       const bindGroupEntries: GPUBindGroupEntry[] = [];
       for (let index = 0; index < buffers.length; ++index) {
@@ -1009,6 +1294,8 @@ function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: num
       entries: marshalBindGroupEntries(proxyEncoder.dataBytes),
     });
     encoder.setBindGroup(0, dataBindGroup);
+    encoder.setBindGroup(1, device.createBindGroup({ layout: renderPipeline.getBindGroupLayout(1), entries: [] }));
+    encoder.setBindGroup(2, internals.createDebugInOutsBindGroup(renderPipeline.getBindGroupLayout(2)));
     encoder.dispatchWorkgroups(count);
   });
 }
@@ -1025,6 +1312,14 @@ function EncoderEndEncoding(encoder: MTLRenderCommandEncoder|MTLComputeCommandEn
 
 async function WaitForInternalsReady() {
   await SharedMTLInternals().ready;
+}
+
+function InternalMarkFrameStart() {
+  SharedMTLInternals().prepareDebugInOuts();
+}
+
+function InternalMarkFrameEnd() {
+  SharedMTLInternals().readbackDebugOuts();
 }
 
 
