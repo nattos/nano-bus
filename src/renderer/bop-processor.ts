@@ -6,8 +6,6 @@ import { getNodeLabel, tsGetMappedType, tsGetSourceFileOfNode, tsGetSyntaxTypeLa
 import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction, BopVariable, BopReference, BopGenericFunctionInstance, BopInferredNumberType, BopAuxTypeInference } from './bop-data';
 import { loadBopLib, toStringResolvedType } from './bop-lib-loader';
 import { bopRewriteShaderFunction, bopShaderBinding, FuncMutatorFunc, GpuBindings } from './bop-shader-binding';
-import { evalJavascriptInContext, SharedMTLInternals } from './bop-javascript-lib';
-import { WGSL_LIB_CODE } from './bop-wgsl-lib';
 
 
 
@@ -23,7 +21,10 @@ export class BopProcessor {
   readonly writer = new CodeWriter();
   readonly globalBlock: BopBlock;
   blockWriter: CodeStatementWriter;
-  initFuncBlockWriter: CodeStatementWriter;
+  readonly initFuncIdentifier: CodeNamedToken;
+  readonly initFuncBlockWriter: CodeStatementWriter;
+  readonly runFuncIdentifier: CodeNamedToken;
+  readonly runFuncBlockWriter: CodeStatementWriter;
   block: BopBlock;
   scopeReturnType: BopType;
   asAssignableRef = false;
@@ -33,6 +34,7 @@ export class BopProcessor {
   readonly instanceBlockWriter: CodeStructWriter;
   readonly instanceScope: CodeScope;
   readonly prepareFuncs: CodeVariable[] = [];
+  readonly runFuncs: CodeVariable[] = [];
   readonly bopFunctionConcreteImpls: BopFunctionConcreteImplDetail[] = [];
   private readonly specialHandlers: Array<(node: ts.CallExpression) => BopStage|undefined> = [
     bopShaderBinding.bind(this),
@@ -62,10 +64,18 @@ export class BopProcessor {
     this.tc = program.getTypeChecker();
     sourceRoot.statements.forEach(this.printRec.bind(this));
 
-    const initFunc = this.writer.global.writeFunction(this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Function, 'init'));
+    this.initFuncIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Function, 'init');
+    const initFunc = this.writer.global.writeFunction(this.initFuncIdentifier);
     initFunc.touchedByCpu = true;
     this.blockWriter = initFunc.body;
     this.initFuncBlockWriter = initFunc.body;
+
+    this.runFuncIdentifier = this.writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Function, 'run');
+    const runFunc = this.writer.global.writeFunction(this.runFuncIdentifier);
+    runFunc.touchedByCpu = true;
+    this.blockWriter = runFunc.body;
+    this.runFuncBlockWriter = runFunc.body;
+
     this.globalBlock = BopBlock.createGlobalBlock();
     this.block = this.globalBlock;
 
@@ -125,19 +135,14 @@ export class BopProcessor {
         // console.log(`${typeName}.${methodName}(${method.parameters.map(p => `${p.name}: ${toStringResolvedType(p.type(typeArgs, methodTypeArgs))}`).join(', ')}): ???`);
       }
     }
-
-    console.log(Array.from(libTypes.values()));
-
-
-
-
-
+    // console.log(Array.from(libTypes.values()));
 
     this.scopeReturnType = this.errorType;
+  }
 
+  compile() {
+    this.scopeReturnType = this.errorType;
     this.visitTopLevelNode(this.sourceRoot);
-    console.log(this.globalBlock);
-
     this.mapAndResolveRec(this.globalBlock);
 
     for (const c of this.globalBlock.children) {
@@ -150,6 +155,9 @@ export class BopProcessor {
     for (const prepareFunc of this.prepareFuncs) {
       this.initFuncBlockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(prepareFunc.identifierToken);
     }
+    for (const runFunc of this.runFuncs) {
+      this.runFuncBlockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(runFunc.identifierToken);
+    }
 
     utils.visitRec(
         this.bopFunctionConcreteImpls.filter(impl => impl.touchedByCpu),
@@ -161,46 +169,35 @@ export class BopProcessor {
         node => node.touchedByGpu = true);
 
     const platform = CodeWriterPlatform.WebGPU;
-    const cpuCode = this.writer.getOuterCode(false, platform);
+    const { code: cpuCode, translatedTokens } = this.writer.getOuterCode(false, platform, { translateTokens: [ this.initFuncIdentifier, this.runFuncIdentifier ] });
     console.log(cpuCode);
-    const gpuCode = this.writer.getOuterCode(true, platform);
+    const { code: gpuCode } = this.writer.getOuterCode(true, platform);
     console.log(gpuCode);
 
-    // const evalContext = new BopJavascriptEvalContext();
-    // function evalInContext(this: BopJavascriptEvalContext, code: string) {
-    //   return eval(code);
-    // }
-    SharedMTLInternals().loadShaderCode(gpuCode);
-    evalJavascriptInContext(`
+    const initFuncName = translatedTokens.get(this.initFuncIdentifier);
+    const runFuncName = translatedTokens.get(this.runFuncIdentifier);
+
+    const cpuPrepareCode = `
 const instanceVars = {};
 ` + cpuCode + `
 (async () => {
+  const continueFlag = PopInternalContinueFlag();
   await WaitForInternalsReady();
+  ${initFuncName}();
+  continueFlag?.resolve(undefined);
+})();
+`;
+    const cpuRunFrameCode = `
+(async () => {
+  const continueFlag = PopInternalContinueFlag();
   InternalMarkFrameStart();
-  F8_computeShader_prepare();
-  F10_vertexShader_fragmentShader_prepare();
-  // F8_vertexShader_fragmentShader_prepare();
-  // F8_computeShader_prepare();
-  F6_drawTriangle();
+  ${runFuncName}();
   // F1_drawTriangle();
   InternalMarkFrameEnd();
+  continueFlag?.resolve(undefined);
 })();
-`);
-
-    // (async () => {
-    //   const adapter = await navigator.gpu.requestAdapter();
-    //   const device = await adapter?.requestDevice();
-    //   if (!adapter || !device) {
-    //     return;
-    //   }
-    //   const shaderModule = device.createShaderModule({
-    //     code: gpuCode + WGSL_LIB_CODE,
-    //   });
-    //   const compilationInfo = await shaderModule.getCompilationInfo();
-    //   if (compilationInfo.messages.length > 0) {
-    //     console.log(compilationInfo.messages.map(m => `${m.lineNum}:${m.linePos} ${m.type}: ${m.message}`).join('\n'));
-    //   }
-    // })();
+`;
+    return { cpuPrepareCode, cpuRunFrameCode, gpuCode };
   }
 
   private mapAndResolveRec(block: BopBlock, children?: Array<BopStage|BopBlock>) {
@@ -487,7 +484,7 @@ const instanceVars = {};
 
     // console.log(node);
     const sourceMapRange = ts.getSourceMapRange(node);
-    console.log(`${tsGetSyntaxTypeLabel(node.kind)}   inner code: ${(sourceMapRange.source ?? this.sourceRoot).text.substring(sourceMapRange.pos, sourceMapRange.end).trim()}`);
+    // console.log(`${tsGetSyntaxTypeLabel(node.kind)}   inner code: ${(sourceMapRange.source ?? this.sourceRoot).text.substring(sourceMapRange.pos, sourceMapRange.end).trim()}`);
 
     const block = this.block;
     const asAssignableRef = this.asAssignableRef;
@@ -537,7 +534,7 @@ const instanceVars = {};
 
   private visitBlockGenerator(node: ts.Node): BopStage|undefined {
     const sourceMapRange = ts.getSourceMapRange(node);
-    console.log(`${tsGetSyntaxTypeLabel(node.kind)}   inner code: ${(sourceMapRange.source ?? this.sourceRoot).text.substring(sourceMapRange.pos, sourceMapRange.end).trim()}`);
+    // console.log(`${tsGetSyntaxTypeLabel(node.kind)}   inner code: ${(sourceMapRange.source ?? this.sourceRoot).text.substring(sourceMapRange.pos, sourceMapRange.end).trim()}`);
 
     const block = this.block;
     const asAssignableRef = this.asAssignableRef;
@@ -989,7 +986,7 @@ const instanceVars = {};
       if (!this.verifyNotNulllike(functionSignature, `Function has unresolved signature.`)) {
         return;
       }
-      console.log(this.tc.signatureToString(functionSignature));
+      // console.log(this.tc.signatureToString(functionSignature));
 
       let typeParameters: BopFields = [];
       const instantatedFromSignature = (functionSignature as any)?.target as ts.Signature|undefined;
@@ -1085,7 +1082,7 @@ const instanceVars = {};
       if (!this.verifyNotNulllike(functionSignature, `Function has unresolved signature.`)) {
         return;
       }
-      console.log(this.tc.signatureToString(functionSignature));
+      // console.log(this.tc.signatureToString(functionSignature));
 
       const type = this.resolveType(this.tc.getTypeAtLocation(node));
       return this.makeCallBop(node, () => {
@@ -1562,6 +1559,7 @@ const instanceVars = {};
       // HACK!!!!!!!!
       if (funcName === 'drawTriangle') {
         concreteImpl.touchedByCpu = true;
+        this.runFuncs.push(concreteFunctionIdentifier);
       }
       this.bopFunctionConcreteImpls.push(concreteImpl);
       newFunctionType.functionOf!.overloads[0].concreteImpl = concreteImpl;
@@ -1828,7 +1826,7 @@ const instanceVars = {};
     if (result?.expressionResult) {
       this.resultMap.set(stage, result);
       if (result.exportDebugOut) {
-        console.log('exportDebugOut', result.exportDebugOut, result.exportDebugOut.overrideResult ?? result.expressionResult, tsGetSyntaxTypeLabel(stage.debugInfo?.sourceNode?.kind), stage.debugInfo?.sourceCode);
+        // console.log('exportDebugOut', result.exportDebugOut, result.exportDebugOut.overrideResult ?? result.expressionResult, tsGetSyntaxTypeLabel(stage.debugInfo?.sourceNode?.kind), stage.debugInfo?.sourceCode);
         const exportBopVar = result.exportDebugOut.overrideResult ?? result.expressionResult;
         const exportVar = exportBopVar.result;
         if (exportVar && exportBopVar) {
@@ -2336,7 +2334,7 @@ const instanceVars = {};
       sourceSnippetStr = sourceSnippetStr.substring(0, sourceSnippetLength) + ' …';
     }
     sourceSnippetStr = sourceSnippetStr.trim();
-    console.log(`${nodeKindStr?.padEnd(16)}   ${this.stringifyType(resolvedType).padEnd(16)}  <=  ${sourceSnippetStr}`);
+    // console.log(`${nodeKindStr?.padEnd(16)}   ${this.stringifyType(resolvedType).padEnd(16)}  <=  ${sourceSnippetStr}`);
     // console.log(resolvedType);
 
     node.getChildren().forEach(this.printRec.bind(this));

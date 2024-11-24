@@ -1,6 +1,7 @@
 import * as utils from '../utils';
 import ts from "typescript";
 import { BopProcessor } from './bop-processor';
+import { evalJavascriptInContext, PushInternalContinueFlag, SharedMTLInternals } from './bop-javascript-lib';
 
 
 
@@ -36,88 +37,71 @@ import { BopProcessor } from './bop-processor';
 
 
 
+export interface CompiledDebugIn {
+  lineNumber: number;
+  valueLength: number;
+  defaultValue: number[];
+}
 
+export interface CompiledDebugOut {
+  lineNumber: number;
+  expectedValueLength: number;
+}
 
+export interface CompileMessage {
+  message: string;
+}
 
-export async function compile(code: string) {
-  // readonly identifier: string,
-  // readonly parameters: LocalDecl[],
-  // readonly returnType: TypeSpec,
-  // readonly genericTypeParameters: TypeParameter[],
-  // readonly statements: Expression[]) {}
-  // let exprIndex = 0;
-  // const returnNode: BuildNode;
-  // const localMap = new Map<LocalDecl, BuildAlias>(func.parameters.map());
+export interface CompileResult {
+  isRunnable: boolean;
+  frameRunner: FrameRunner;
+  messages: CompileMessage[];
+  debugIns: CompiledDebugIn[];
+  debugOuts: CompiledDebugOut[];
+}
 
-  // const expressionMap = new Map<Expression, BuildNode>();
-  // const nodeList = Array.from(expressionMap.values()).concat(returnNode).concat(localMap);
-  // // TODO: Recurse.
-  // for (const s of func.statements) {
-  //   if (s definesLocal) {
-  //     localMap.;
-  //   }
-  //   if (s returns) {
-  //     //
-  //     returnNode.sets.push(expressionMap.get(s.returnExpr));
-  //   } else if (s continues) {
-  //     //
-  //   } else if (s breaks) {
-  //     //
-  //   }
-  //   // if (s terminatesAbnormally) {
-  //   //   // Not supported?
-  //   // }
-  // }
+export interface FrameRunner {
+  runOneFrame(): Promise<void>;
+}
 
-  // const writer = new CodeWriter();
-  // const structASymbol = writer.global.scope.allocateIdentifier('struct', 'A');
-  // const structARet = writer.global.writeStruct(structASymbol);
-  // const structAFieldX = structARet.struct.scope.allocateIdentifier('field', 'x');
-  // const structAFieldY = structARet.struct.scope.allocateIdentifier('field', 'y');
-  // structARet.struct.writeField(structAFieldX, CodeTypeSpec.intType);
-  // structARet.struct.writeField(structAFieldY, CodeTypeSpec.intType);
-
-  // const funcSomethingRet = writer.global.writeFunction(writer.global.scope.allocateIdentifier('f', 'funcSomething'), []);
-  // {
-  //   const aVar = funcSomethingRet.body.scope.createVariableInScope(CodeTypeSpec.fromStruct(structASymbol), 'aStruct');
-  //   const stmt = funcSomethingRet.body.writeVariableDeclaration(aVar);
-  //   stmt.initializer.writeAssignStructField(structAFieldX).value.writeLiteralInt(123);
-  //   stmt.initializer.writeAssignStructField(structAFieldY).value.writeLiteralInt(234);
-  // }
-  // {
-  //   const aVar = funcSomethingRet.body.scope.createVariableInScope(CodeTypeSpec.intType, 'a');
-  //   const stmt = funcSomethingRet.body.writeVariableDeclaration(aVar);
-  //   stmt.initializer.writeExpression().writeLiteralInt(123);
-  // }
-  // {
-  //   const stmt = funcSomethingRet.body.writeReturnStatement();
-  //   const op1 = stmt.expr.writeBinaryOperation(CodeBinaryOperator.Add);
-  //   const op2 = op1.lhs.writeBinaryOperation(CodeBinaryOperator.Add);
-  //   op2.lhs.writeLiteralInt(1);
-  //   op2.rhs.writeLiteralInt(2);
-  //   op1.rhs.writeLiteralInt(3);
-  // }
-
-  // console.log(writer.getOuterCode());
-
-
+export async function compile(code: string): Promise<CompileResult> {
   const libCode = await (await fetch('/bop-lib-code.d.ts')).text();
 
-  // ts.sys = new CodeSystem();
   const compilerHost = new MemoryCompilerHost(new Map<string, string>([
     [ 'test.ts', code ],
     [ 'default.d.ts', libCode ],
   ]));
-  // const root = ts.createSourceFile('test.ts', code, ts.ScriptTarget.Latest);
-  // console.log(root);
   const program = ts.createProgram(['test.ts'], {}, compilerHost);
-  // const tc = program.getTypeChecker();
-  // console.log(program);
   const root = program.getSourceFile('test.ts')!;
 
-  new BopProcessor(program, root);
-  // const rootExpr = visitNodeRec(root)!;
-  // console.log(rootExpr);
+  const processor = new BopProcessor(program, root);
+  const { cpuPrepareCode, cpuRunFrameCode, gpuCode } = processor.compile();
+
+  let prepared = false;
+  const frameRunner: FrameRunner = {
+    async runOneFrame() {
+      if (!prepared) {
+        prepared = true;
+        SharedMTLInternals().loadShaderCode(gpuCode);
+        const continueFlag = new utils.Resolvable<unknown>();
+        PushInternalContinueFlag(continueFlag);
+        evalJavascriptInContext(cpuPrepareCode);
+        await continueFlag.promise;
+      }
+      const continueFlag = new utils.Resolvable<unknown>();
+      PushInternalContinueFlag(continueFlag);
+      evalJavascriptInContext(cpuRunFrameCode);
+      await continueFlag.promise;
+    },
+  };
+
+  return {
+    isRunnable: true,
+    frameRunner,
+    messages: [],
+    debugIns: [],
+    debugOuts: [],
+  };
 }
 
 
@@ -171,11 +155,11 @@ class MemoryCompilerHost implements ts.CompilerHost {
   constructor(public codeFiles: Map<string, string>) {}
 
   fileExists(fileName: string): boolean {
-    console.log(`readFile ${fileName}`);
+    // console.log(`readFile ${fileName}`);
     return true;
   }
   readFile(fileName: string): string | undefined {
-    console.log(`readFile ${fileName}`);
+    // console.log(`readFile ${fileName}`);
     return '';
   }
   // trace?(s: string): void;
@@ -186,7 +170,7 @@ class MemoryCompilerHost implements ts.CompilerHost {
   // useCaseSensitiveFileNames?: boolean | (() => boolean) | undefined;
 
   getSourceFile(fileName: string, languageVersionOrOptions: ts.ScriptTarget | ts.CreateSourceFileOptions, onError?: (message: string) => void, shouldCreateNewSourceFile?: boolean): ts.SourceFile | undefined {
-    console.log(`getSourceFile ${fileName}: shouldCreateNewSourceFile: ${shouldCreateNewSourceFile}`);
+    // console.log(`getSourceFile ${fileName}: shouldCreateNewSourceFile: ${shouldCreateNewSourceFile}`);
     const code = this.codeFiles.get(fileName);
     if (code === undefined) {
       return undefined;

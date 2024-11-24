@@ -299,7 +299,7 @@ export function loadBopLib(host: {
       };
 
       for (const method of fromType.methods) {
-        console.log(method);
+        // console.log(method);
         intoType.methods.push({
           name: method.name,
           typeParameters: method.typeParameters,
@@ -367,7 +367,7 @@ export function loadBopLib(host: {
         const methodName = method.name;
         const debugMethodName = `${instantiatedTypeName}::${methodName}`;
 
-        console.log(debugMethodName);
+        // console.log(debugMethodName);
         if (method.typeParameters.length === 0 || method.isConstructor) {
           const methodTypeArgs: ResolvedType[] = [];
           const params: BopFields = method.parameters.map(p => {

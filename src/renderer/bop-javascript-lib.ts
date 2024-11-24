@@ -80,8 +80,6 @@ class BopLibDebugOuts {
 
     const inView = new DataView(marshaledBytes);
 
-    console.log(inViewportSize, thisViewportSize, viewportSize, inViewportStart, inViewportEnd, thisViewportStart, thisViewportEnd, copyStart, copyEnd, copyLength);
-
     for (let i = 0; i < copyLength; ++i) {
       const inOffset = (inLineOffset + i) * 5;
       const inValueLength = inView.getInt32((inOffset + 0) * 4, this.littleEndian);
@@ -90,7 +88,6 @@ class BopLibDebugOuts {
       const thisValueLength = this.dataView.getFloat32((thisOffset + 0) * 4, this.littleEndian);
 
       if (inValueLength > thisValueLength) {
-        console.log(inOffset, inValueLength, thisValueLength, i, copyStart + i);
         this.dataView.setInt32((thisOffset + 0) * 4, inValueLength, this.littleEndian);
         this.dataView.setFloat32((thisOffset + 1) * 4, inView.getFloat32((inOffset + 1) * 4, this.littleEndian), this.littleEndian);
         this.dataView.setFloat32((thisOffset + 2) * 4, inView.getFloat32((inOffset + 2) * 4, this.littleEndian), this.littleEndian);
@@ -204,6 +201,8 @@ const BopLib = {
   exportDebugOut(lineNumber: number, length: number, v0: number, v1: number, v2: number, v3: number) {
     this.debugOuts.write(lineNumber, length, v0, v1, v2, v3);
   },
+
+  continueFlag: undefined as (utils.Resolvable<unknown>|undefined),
 };
 
 class BopFloat4 {
@@ -291,7 +290,7 @@ class BopArrayImpl<T> {
 
     let gpuDirty = this.gpuDirty;
     if (this.gpuBuffer === undefined || this.gpuBuffer.size < byteLength) {
-      console.log("device.createBuffer");
+      // console.log("device.createBuffer");
       this.gpuBuffer = device.createBuffer({
         size: byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.UNIFORM
@@ -307,7 +306,7 @@ class BopArrayImpl<T> {
         marshalFunc(this.buffer[i], bufferFiller, i);
       }
       device.queue.writeBuffer(this.gpuBuffer, 0, bufferFiller.getBuffer(), 0, byteLength);
-      console.log("ensureGpuBuffer", "device.queue.writeBuffer(this.gpuBuffer, 0, bufferFiller.getBuffer(), 0, byteLength);");
+      // console.log("ensureGpuBuffer", "device.queue.writeBuffer(this.gpuBuffer, 0, bufferFiller.getBuffer(), 0, byteLength);");
     }
   }
   ensureGpuVertexBuffer(commandEncoder: GPUCommandEncoder) {
@@ -330,7 +329,7 @@ class BopArrayImpl<T> {
     if (gpuDirty) {
       this.gpuVertexDirty = false;
       commandEncoder.copyBufferToBuffer(gpuBuffer, 0, this.gpuVertexBuffer, 0, byteLength);
-      console.log("ensureGpuVertexBuffer", "commandEncoder.copyBufferToBuffer(gpuBuffer, 0, this.gpuVertexBuffer, 0, byteLength);");
+      // console.log("ensureGpuVertexBuffer", "commandEncoder.copyBufferToBuffer(gpuBuffer, 0, this.gpuVertexBuffer, 0, byteLength);");
     }
   }
 }
@@ -448,13 +447,14 @@ export class MTLInternals {
       const device = await adapter?.requestDevice();
       this._device = device;
       if (!adapter || !device) {
-        console.log('WebGPU initialization failed.');
+        console.error('WebGPU initialization failed.');
       }
       if (device) {
         const insValuesProxy = new BopArray(BopFloat4, 100);
 
         const outsMetadataByteLength = 2 * 4;
         const outsMetadataCpuBuffer = new ArrayBuffer(outsMetadataByteLength);
+        const outsMetadataCpuView = new DataView(outsMetadataCpuBuffer);
         const outsMetadataGpuBuffer = device.createBuffer({
           size: outsMetadataByteLength,
           usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
@@ -494,7 +494,6 @@ export class MTLInternals {
               const readValues = outsValuesArrayGpuBufferReadable.getMappedRange();
               outsValuesArrayCpuBufferUint8.set(new Uint8Array(readValues));
               outsValuesArrayGpuBufferReadable.unmap();
-              console.log(new Float32Array(outsValuesArrayCpuBufferUint8.buffer));
 
               // Merge into CPU view.
               BopLib.debugOuts.merge(thisViewportStart, outsValuesArrayCpuBuffer);
@@ -536,6 +535,7 @@ export class MTLInternals {
 
         this.debugInOuts = {
           prepare: () => {
+            // Upload new ins.
             insValuesProxy.getImpl().ensureGpuBuffer();
             const insValuesGpuBuffer = insValuesProxy.getImpl().getGpuBuffer();
             if (!insValuesGpuBuffer) {
@@ -572,6 +572,9 @@ export class MTLInternals {
               currentBindGroup = createDebugInOutsBindGroup(insValuesGpuBuffer, layout);
             }
 
+            // Prepare outs viewport, and clear out flags.
+            outsMetadataCpuView.setInt32(0 * 4, BopLib.debugOuts.viewportStart);
+            outsMetadataCpuView.setInt32(1 * 4, BopLib.debugOuts.viewportEnd);
             device.queue.writeBuffer(outsMetadataGpuBuffer, 0, outsMetadataCpuBuffer, 0, outsMetadataCpuBuffer.byteLength);
             const commandEncoder = device.createCommandEncoder();
             commandEncoder.clearBuffer(outsValuesArrayGpuBufferStorage);
@@ -601,7 +604,7 @@ export class MTLInternals {
       });
       const compilationInfo = await shaderModule?.getCompilationInfo();
       if ((compilationInfo?.messages.length ?? 0) > 0) {
-        console.log(compilationInfo?.messages.map(m => `${m.lineNum}:${m.linePos} ${m.type}: ${m.message}`).join('\n'));
+        console.warn(compilationInfo?.messages.map(m => `${m.lineNum}:${m.linePos} ${m.type}: ${m.message}`).join('\n'));
       }
       return { shaderModule };
     })();
@@ -983,7 +986,7 @@ class MTLRenderCommandEncoder {
         await this.finishedEncodingFlag.wait();
       });
       await acquiredGlobalLock.promise;
-      console.log("MTLRenderCommandEncoder", "acquiredGlobalLock");
+      // console.log("MTLRenderCommandEncoder", "acquiredGlobalLock");
 
       await this.compileFlag.promise;
       const { device } = await internals.ready;
@@ -1084,7 +1087,7 @@ class MTLComputeCommandEncoder {
         await this.finishedEncodingFlag.wait();
       });
       await acquiredGlobalLock.promise;
-      console.log("MTLComputeCommandEncoder", "acquiredGlobalLock");
+      // console.log("MTLComputeCommandEncoder", "acquiredGlobalLock");
 
       await this.compileFlag.promise;
       const { device } = await internals.ready;
@@ -1141,7 +1144,7 @@ function MakeMTLRenderCommandEncoder(renderPassDescriptor: MTLRenderPassDescript
   return new MTLRenderCommandEncoder(renderPassDescriptor);
 }
 function EncoderSetVertexAttributeBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
-  console.log('EncoderSetVertexAttributeBuffer', encoder, buffer, offset, index);
+  // console.log('EncoderSetVertexAttributeBuffer', encoder, buffer, offset, index);
   const bufferImpl = buffer.getImpl();
   bufferImpl.ensureGpuBuffer();
   encoder.queuePretask(async (commandEncoder) => {
@@ -1151,25 +1154,25 @@ function EncoderSetVertexAttributeBuffer(encoder: MTLRenderCommandEncoder, buffe
 }
 
 function EncoderSetVertexBytes(encoder: MTLRenderCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
-  console.log('EncoderSetVertexBytes', encoder, buffer, offset, index);
+  // console.log('EncoderSetVertexBytes', encoder, buffer, offset, index);
   encoder.setVertexBytes(buffer, index);
 }
 function EncoderSetVertexBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
-  console.log('EncoderSetVertexBuffer', encoder, buffer, offset, index);
+  // console.log('EncoderSetVertexBuffer', encoder, buffer, offset, index);
   buffer.getImpl().ensureGpuBuffer();
   encoder.setVertexBytes(buffer, index);
 }
 function EncoderSetFragmentBytes(encoder: MTLRenderCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
-  console.log('EncoderSetFragmentBytes', encoder, buffer, offset, index);
+  // console.log('EncoderSetFragmentBytes', encoder, buffer, offset, index);
   encoder.setFragmentBytes(buffer, index);
 }
 function EncoderSetFragmentBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
-  console.log('EncoderSetFragmentBuffer', encoder, buffer, offset, index);
+  // console.log('EncoderSetFragmentBuffer', encoder, buffer, offset, index);
   buffer.getImpl().ensureGpuBuffer();
   encoder.setFragmentBytes(buffer, index);
 }
 function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimitiveType, offset: number, count: number) {
-  console.log('EncodeDrawPrimitives', encoder, type, offset, count);
+  // console.log('EncodeDrawPrimitives', encoder, type, offset, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
     const internals = SharedMTLInternals();
@@ -1208,7 +1211,7 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
           });
           device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
-          console.log("EncoderDrawPrimitives", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
+          // console.log("EncoderDrawPrimitives", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
         }
 
         const bindGroupEntry: GPUBindGroupEntry = {
@@ -1242,16 +1245,16 @@ function MakeMTLComputeCommandEncoder(): MTLComputeCommandEncoder {
   return new MTLComputeCommandEncoder();
 }
 function EncoderSetComputeBytes(encoder: MTLComputeCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
-  console.log('EncoderSetComputeBytes', encoder, buffer, offset, index);
+  // console.log('EncoderSetComputeBytes', encoder, buffer, offset, index);
   encoder.setBytes(buffer, index);
 }
 function EncoderSetComputeBuffer(encoder: MTLComputeCommandEncoder, buffer: BopArray<unknown>, offset: number, index: number) {
-  console.log('EncoderSetComputeBuffer', encoder, buffer, offset, index);
+  // console.log('EncoderSetComputeBuffer', encoder, buffer, offset, index);
   buffer.getImpl().ensureGpuBuffer();
   encoder.setBytes(buffer, index);
 }
 function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: number) {
-  console.log('EncoderDispatchWorkgroups', encoder, count);
+  // console.log('EncoderDispatchWorkgroups', encoder, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
     const internals = SharedMTLInternals();
@@ -1276,7 +1279,7 @@ function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: num
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
           });
           device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
-          console.log("EncoderDispatchWorkgroups", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
+          // console.log("EncoderDispatchWorkgroups", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
         }
 
         const bindGroupEntry: GPUBindGroupEntry = {
@@ -1308,6 +1311,16 @@ function EncoderEndEncoding(encoder: MTLRenderCommandEncoder|MTLComputeCommandEn
     device.queue.submit([commandEncoder.finish()]);
     return { finishedEncoding: true };
   });
+}
+
+export function PopInternalContinueFlag(): utils.Resolvable<unknown>|undefined {
+  const continueFlag = BopLib.continueFlag;
+  BopLib.continueFlag = undefined;
+  return continueFlag;
+}
+
+export function PushInternalContinueFlag(flag: utils.Resolvable<unknown>) {
+  BopLib.continueFlag = flag;
 }
 
 async function WaitForInternalsReady() {

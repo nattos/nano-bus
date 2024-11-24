@@ -194,7 +194,7 @@ export class CodeWriter {
     return identifierToken;
   }
 
-  getOuterCode(isGpu: boolean, platform: CodeWriterPlatform): string {
+  getOuterCode(isGpu: boolean, platform: CodeWriterPlatform, options?: { translateTokens?: CodeNamedToken[] }): { code: string, translatedTokens: Map<CodeNamedToken, string> } {
     const identifierMap = new Map<CodeNamedToken, string>();
     const assignIdentifiersRec = (scope: CodeScope, depth: number) => {
       let depthStr: string;
@@ -236,7 +236,22 @@ export class CodeWriter {
     const context: CodeWriterContext = { isGpu: isGpu, platform: platform };
     const stream = new CodeTextStream(context, identifierMap);
     this.global.writerFunc(stream, context);
-    return stream.getOuterCode();
+    const outerCode = stream.getOuterCode();
+
+    const translatedTokens = new Map<CodeNamedToken, string>();
+    if (options?.translateTokens) {
+      for (const token of options.translateTokens) {
+        const translated = identifierMap.get(token);
+        if (translated) {
+          translatedTokens.set(token, translated);
+        }
+      }
+    }
+
+    return {
+      code: outerCode,
+      translatedTokens: translatedTokens,
+    };
   }
 
   sanitizeIdentifier(str: string): string {

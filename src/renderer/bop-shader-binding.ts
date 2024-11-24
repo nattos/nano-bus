@@ -136,9 +136,9 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
           });
         } else if (field.bopType.internalTypeOf?.arrayOfType) {
           const arrayOfType = field.bopType.internalTypeOf?.arrayOfType;
-          console.log(arrayOfType);
+          // console.log(arrayOfType);
           const elementBindings = makeGpuBindings.bind(this)(arrayOfType, thisVisitedSet);
-          console.log(elementBindings);
+          // console.log(elementBindings);
           const elementBinding = elementBindings.bindings.find(b => b.type === 'fixed');
           if (elementBindings.bindings.length !== 1 || elementBinding?.type !== 'fixed') {
             this.logAssert(`Cannot bind array of type ${arrayOfType.debugName} as it is not blittable.`);
@@ -628,9 +628,9 @@ export function bopComputeCall(this: BopProcessor, shaderCallNode: ts.CallExpres
     return;
   }
 
-  console.log(this.tc.signatureToString(renderElementsFunctionSignature));
-  console.log(this.tc.signatureToString(vertexFunctionSignature));
-  console.log(this.tc.signatureToString(fragmentFunctionSignature));
+  // console.log(this.tc.signatureToString(renderElementsFunctionSignature));
+  // console.log(this.tc.signatureToString(vertexFunctionSignature));
+  // console.log(this.tc.signatureToString(fragmentFunctionSignature));
 
   const fragmentArgBops = fragmentCallNode.arguments.map(arg => this.visitChild(arg));
   const vertexArgBops =  vertexCallNode.arguments.map(arg => this.visitChild(arg));
@@ -1054,9 +1054,9 @@ export function bopRenderElementsCall(this: BopProcessor, fragmentCallNode: ts.C
     return;
   }
 
-  console.log(this.tc.signatureToString(renderElementsFunctionSignature));
-  console.log(this.tc.signatureToString(vertexFunctionSignature));
-  console.log(this.tc.signatureToString(fragmentFunctionSignature));
+  // console.log(this.tc.signatureToString(renderElementsFunctionSignature));
+  // console.log(this.tc.signatureToString(vertexFunctionSignature));
+  // console.log(this.tc.signatureToString(fragmentFunctionSignature));
 
   const fragmentArgBops = fragmentCallNode.arguments.map(arg => this.visitChild(arg));
   const vertexArgBops =  vertexCallNode.arguments.map(arg => this.visitChild(arg));
@@ -1395,7 +1395,7 @@ export function bopRenderElementsCall(this: BopProcessor, fragmentCallNode: ts.C
           for (const binding of bindings.bindings) {
             if (binding.type === 'fixed') {
               var bufferFillerVar = this.blockWriter.scope.allocateVariableIdentifier(this.privateTypes.BufferFiller.tempType, BopIdentifierPrefix.Local, 'bufferFiller');
-              console.log(this.privateTypes.BufferFiller);
+              // console.log(this.privateTypes.BufferFiller);
               const stmt = this.blockWriter.writeVariableDeclaration(bufferFillerVar);
               stmt.initializer.writeAssignStructField(this.writer.makeInternalToken('byteLength')).value.writeLiteralInt(binding.byteLength);
               binding.marshal(dataVar, new BufferFiller(this, bufferFillerVar), this.blockWriter);
