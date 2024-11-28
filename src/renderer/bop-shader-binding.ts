@@ -66,7 +66,11 @@ export interface GpuArrayBinding extends GpuBindingBase {
   userType: BopType;
   marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable };
 }
-export type GpuBinding = GpuFixedBinding|GpuArrayBinding;
+export interface GpuTextureBinding extends GpuBindingBase {
+  type: 'texture';
+  marshal(dataVar: CodeVariable, body: CodeStatementWriter): { textureVar: CodeVariable };
+}
+export type GpuBinding = GpuFixedBinding|GpuArrayBinding|GpuTextureBinding;
 
 export interface GpuBindings {
   bindings: GpuBinding[];
@@ -112,9 +116,13 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
       length?: CodeVariable;
     };
   }
+  interface BindTexture {
+    path: PathPart[];
+  }
 
   const collectedCopyFields: Array<CopyField> = [];
   const collectedArrays: Array<BindArray> = [];
+  const collectedTextures: Array<BindTexture> = [];
 
   if (bopType.structOf) {
     const visitRec = (subpath: PathPart[], fields: BopVariable[]) => {
@@ -134,6 +142,11 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
             path: fieldSubpath,
             type: 'float',
           });
+        } else if (field.bopType === this.libTypes.Texture) {
+          const bindArray: BindTexture = {
+            path: fieldSubpath,
+          };
+          collectedTextures.push(bindArray);
         } else if (field.bopType.internalTypeOf?.arrayOfType) {
           const arrayOfType = field.bopType.internalTypeOf?.arrayOfType;
           // console.log(arrayOfType);
@@ -265,8 +278,8 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
       location: bindings.length,
       userType: binding.userType,
       marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable } {
-        const arrayVar = body.scope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.tempType, BopIdentifierPrefix.Local, `bindArray_${binding.path.at(-1)?.identifier.nameHint}`);
-        let readExprLeaf = body.writeVariableDeclaration(arrayVar).initializer.writeExpression();
+        const extractedPropVar = body.scope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.tempType, BopIdentifierPrefix.Local, `bindArray_${binding.path.at(-1)?.identifier.nameHint}`);
+        let readExprLeaf = body.writeVariableDeclaration(extractedPropVar).initializer.writeExpression();
         for (let i = binding.path.length - 1; i >= 0; --i) {
           const pathPart = binding.path[i];
           const propAccess = readExprLeaf.writePropertyAccess(pathPart.identifier);
@@ -299,7 +312,7 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
           bufferFiller.baseOffsetVar = baseOffsetVar;
           binding.elementBinding.marshal(valueVar, bufferFiller, funcBody);
         }
-        return { arrayVar: arrayVar };
+        return { arrayVar: extractedPropVar };
       },
       unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BopVariable): void {
         const rootBlock = intoBopVar.lookupBlockOverride ?? self.globalBlock.createChildBlock(CodeScopeType.Local);
@@ -334,6 +347,43 @@ function makeGpuBindings(this: BopProcessor, bopType: BopType, visitedSet?: Set<
               lengthProp.result = proxyVar;
             }
           }
+        }
+        intoBopVar.requiresDirectAccess = true;
+        intoBopVar.lookupBlockOverride = rootBlock;
+      },
+    });
+  }
+  for (const binding of collectedTextures) {
+    const self = this;
+    bindings.push({
+      type: 'texture',
+      nameHint: binding.path.at(-1)?.identifier.nameHint ?? 'unknown',
+      location: bindings.length,
+      marshal(dataVar: CodeVariable, body: CodeStatementWriter): { textureVar: CodeVariable } {
+        const extractedPropVar = body.scope.allocateVariableIdentifier(self.libTypes.Texture.tempType, BopIdentifierPrefix.Local, `bindTexture_${binding.path.at(-1)?.identifier.nameHint}`);
+        let readExprLeaf = body.writeVariableDeclaration(extractedPropVar).initializer.writeExpression();
+        for (let i = binding.path.length - 1; i >= 0; --i) {
+          const pathPart = binding.path[i];
+          const propAccess = readExprLeaf.writePropertyAccess(pathPart.identifier);
+          readExprLeaf = propAccess.source;
+        }
+        readExprLeaf.writeVariableReference(dataVar);
+        return { textureVar: extractedPropVar };
+      },
+      unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BopVariable): void {
+        const rootBlock = intoBopVar.lookupBlockOverride ?? self.globalBlock.createChildBlock(CodeScopeType.Local);
+        let childBlock = rootBlock;
+        let leafVar;
+        for (const part of binding.path) {
+          const fieldName = part.identifier.nameHint;
+          let fieldVar = childBlock.identifierMap.get(fieldName);
+          if (!fieldVar) {
+            fieldVar = childBlock.mapIdentifier(fieldName, part.bopType.tempType, part.bopType);
+            fieldVar.requiresDirectAccess = true;
+            fieldVar.lookupBlockOverride = childBlock.createChildBlock(CodeScopeType.Local);
+          }
+          childBlock = fieldVar.lookupBlockOverride!;
+          leafVar = fieldVar;
         }
         intoBopVar.requiresDirectAccess = true;
         intoBopVar.lookupBlockOverride = rootBlock;
@@ -499,7 +549,12 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
       // const argVar = functionBlock.mapTempIdentifier(param.identifier, this.uintType);
       // params.push({ var: argVar, attribs: [ { key: CodeAttributeKey.GpuBindVertexIndex } ] });
     } else if (paramIndex === optionsParamIndex) {
-      optionsGpuBindings = makeGpuBindings.bind(this)(this.resolveType(param.type, { inBlock: functionBlock }));
+      const optionsBopType = this.resolveType(param.type, { inBlock: functionBlock });
+      if (optionsBopType.structOf) {
+        // HACK!
+        optionsBopType.structOf.touchedByGpu = false;
+      }
+      optionsGpuBindings = makeGpuBindings.bind(this)(optionsBopType);
       const argVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
       argVar.requiresDirectAccess = true;
       for (const binding of optionsGpuBindings.bindings) {
@@ -536,6 +591,22 @@ export function bopRewriteShaderFunction(this: BopProcessor, data: {
             const placeholderAssign = funcWriter.body.writeAssignmentStatement();
             placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
             placeholderAssign.value.writeVariableReferenceReference(uniformVar.identifierToken);
+          });
+        } else if (binding.type === 'texture') {
+          const userParamType = this.libTypes.Texture.tempType;
+          const uniformVar = this.writer.global.scope.allocateVariableIdentifier(userParamType, BopIdentifierPrefix.Local, `${param.identifier}_${binding.nameHint}`);
+          rewriterFuncs.push((funcWriter) => {
+            binding.unmarshal(uniformVar, funcWriter.body, argVar);
+          });
+
+          const varWriter = this.writer.global.writeVariableDeclaration(uniformVar);
+          varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
+          // varWriter.attribs.push({ key: CodeAttributeKey.GpuVarReadWriteArray });
+
+          rewriterFuncs.push((funcWriter) => {
+            const placeholderAssign = funcWriter.body.writeAssignmentStatement();
+            placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
+            placeholderAssign.value.writeVariableReference(uniformVar.identifierToken);
           });
         }
       }
@@ -986,6 +1057,12 @@ export function bopComputeCall(this: BopProcessor, shaderCallNode: ts.CallExpres
               call.addArg().writeVariableReference(arrayVar);
               call.addArg().writeLiteralInt(0);
               call.addArg().writeLiteralInt(binding.location);
+            } else if (binding.type === 'texture') {
+              const { textureVar }  = binding.marshal(dataVar, this.blockWriter);
+              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Texture`));
+              call.addArg().writeVariableReference(encoderVar);
+              call.addArg().writeVariableReference(textureVar);
+              call.addArg().writeLiteralInt(binding.location);
             }
           }
         };
@@ -1327,7 +1404,7 @@ export function bopRenderElementsCall(this: BopProcessor, fragmentCallNode: ts.C
         const fragmentOptionsBopVar = this.readResult(fragmentArgBops[0]);
 
         // Texture renderTarget = AllocatePersistentTexture(GetTrackTextureFormat(), /* salt */ 12345678);
-        const renderTargetVar = allocTmpOut(this.privateTypes.Texture);
+        const renderTargetVar = allocTmpOut(this.libTypes.Texture);
         const renderTarget = this.blockWriter.writeVariableDeclaration(renderTargetVar);
         const renderTargetInit = renderTarget.initializer.writeExpression().writeStaticFunctionCall(this.writer.makeInternalToken('AllocatePersistentTexture'));
         renderTargetInit.addArg().writeStaticFunctionCall(this.writer.makeInternalToken('GetTrackTextureFormat'));
@@ -1411,6 +1488,12 @@ export function bopRenderElementsCall(this: BopProcessor, fragmentCallNode: ts.C
               call.addArg().writeVariableReference(encoderVar);
               call.addArg().writeVariableReference(arrayVar);
               call.addArg().writeLiteralInt(0);
+              call.addArg().writeLiteralInt(binding.location);
+            } else if (binding.type === 'texture') {
+              const { textureVar }  = binding.marshal(dataVar, this.blockWriter);
+              const call = this.blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(this.writer.makeInternalToken(`EncoderSet${stage}Texture`));
+              call.addArg().writeVariableReference(encoderVar);
+              call.addArg().writeVariableReference(textureVar);
               call.addArg().writeLiteralInt(binding.location);
             }
           }

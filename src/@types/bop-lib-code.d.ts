@@ -235,6 +235,7 @@ interface Texture {
 interface TextureConstructor {
   new (width: int, height: int, channels: int = 4): Texture;
   new (size: int2, channels: int = 4): Texture;
+  persistent(width: int, height: int, channels: int = 4): Texture;
 }
 declare var Texture: TextureConstructor;
 

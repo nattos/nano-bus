@@ -44,6 +44,8 @@ export class BopFunctionType {
 export class BopStructType {
   public marshalFunc?: CodeVariable;
   public marshalLength?: number;
+  touchedByGpu = false;
+  touchedByCpu = false;
 
   public constructor(
     readonly fields: BopVariable[]

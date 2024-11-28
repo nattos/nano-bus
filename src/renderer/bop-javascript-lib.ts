@@ -191,9 +191,14 @@ const BopLib = {
     },
   },
   Array: {
-    persistent<T>(elementType: BopClass|undefined, l: number): BopArray<T> {
-      return new BopArray<T>(elementType, l);
+    persistent<T>(elementType: BopClass, l: number): BopArray<T> {
+      return SharedMTLInternals().dequeuePersistentArray(elementType, l);
     },
+  },
+  Texture: {
+    persistent(width: number, height: number, channels?: number) {
+      return SharedMTLInternals().dequeuePersistentTexture(width, height, channels);
+    }
   },
 
   debugOuts: new BopLibDebugOuts(),
@@ -291,6 +296,7 @@ class BopArrayImpl<T> {
     let gpuDirty = this.gpuDirty;
     if (this.gpuBuffer === undefined || this.gpuBuffer.size < byteLength) {
       // console.log("device.createBuffer");
+      this.gpuBuffer?.destroy();
       this.gpuBuffer = device.createBuffer({
         size: byteLength,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.UNIFORM
@@ -320,6 +326,7 @@ class BopArrayImpl<T> {
 
     let gpuDirty = this.gpuVertexDirty;
     if (this.gpuVertexBuffer === undefined || this.gpuVertexBuffer.size < byteLength) {
+      this.gpuVertexBuffer?.destroy();
       this.gpuVertexBuffer = device.createBuffer({
         size: byteLength,
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
@@ -373,7 +380,47 @@ class BopArray<T> {
 
   static push<T>(a: Array<T>, v: T) { a.push(v); }
   static get_length<T>(a: Array<T>) { return a.length; }
-};
+}
+
+class BopTexture {
+  private texture?: GPUTexture;
+  private textureView?: GPUTextureView;
+
+  constructor(public width: number, public height: number, public channels: number = 4) {
+  }
+
+  get requiresGpuUpdate() {
+    return this.texture && this.texture.width === this.width && this.texture.height === this.height;
+  }
+
+  resize(width: number, height: number, channels: number = 4) {
+    this.width = width;
+    this.height = height;
+  }
+
+  getTextureView(): GPUTextureView|undefined {
+    return this.textureView;
+  }
+
+  ensureGpuBuffer() {
+    const device = SharedMTLInternals().device;
+    if (!device) {
+      return;
+    }
+
+    if (this.requiresGpuUpdate) {
+      return;
+    }
+
+    this.texture?.destroy();
+    this.texture = device.createTexture({
+      size: [this.width, this.height],
+      format: 'rgba32float',
+      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    this.textureView = this.texture.createView()!;
+  }
+}
 
 
 
@@ -424,7 +471,51 @@ export class MTLInternals {
     createDebugInOutsBindGroup(layout: GPUBindGroupLayout): GPUBindGroup;
   };
 
-  prepareDebugInOuts() {
+  markFrameStart() {
+    this.prepareDebugInOuts();
+    this.resetPersistentArrays();
+  }
+  markFrameEnd() {
+    this.readbackDebugOuts();
+  }
+
+  private readonly persisentArrays = new Map<BopClass, { all: Array<BopArray<any>>; queue: Array<BopArray<any>>; }>();
+  private readonly persisentTextures: { all: Array<BopTexture>; queue: Array<BopTexture>; } = { all: [], queue: [] };
+
+  private resetPersistentArrays() {
+    for (const entries of this.persisentArrays.values()) {
+      entries.queue.splice(0);
+      entries.queue.push(...entries.all);
+    }
+  }
+
+  dequeuePersistentArray(elementType: BopClass, l: number): BopArray<any> {
+    let entries = this.persisentArrays.get(elementType);
+    if (entries === undefined) {
+      entries = { all: [], queue: [] };
+      this.persisentArrays.set(elementType, entries);
+    }
+    if (entries.queue.length > 0) {
+      return entries.queue.pop()!;
+    }
+    const newArray = new BopArray<any>(elementType, l);
+    entries.all.push(newArray);
+    return newArray;
+  }
+
+  dequeuePersistentTexture(width: number, height: number, channels?: number): BopTexture {
+    const entries = this.persisentTextures;
+    if (entries.queue.length > 0) {
+      const oldEntry = entries.queue.pop()!;
+      oldEntry.resize(width, height, channels);
+      return oldEntry;
+    }
+    const newEntry = new BopTexture(width, height, channels);
+    entries.all.push(newEntry);
+    return newEntry;
+  }
+
+  private prepareDebugInOuts() {
     this.globalEncoderQueue.push(async () => {
       this.debugInOuts?.prepare();
     });
@@ -435,11 +526,9 @@ export class MTLInternals {
     return this.debugInOuts!.createDebugInOutsBindGroup(layout);
   }
 
-  readbackDebugOuts() {
+  private readbackDebugOuts() {
     this.debugInOuts?.readback();
   }
-
-
 
   constructor() {
     const ready = this.ready = (async () => {
@@ -1071,7 +1160,7 @@ class MTLComputeCommandEncoder {
   label = 'Unknown Encoder';
   pipelineState = InvalidMTLComputePipelineState();
 
-  dataBytes: Array<ArrayBuffer|BopArray<unknown>|undefined> = [];
+  dataBytes: Array<ArrayBuffer|BopArray<unknown>|BopTexture|undefined> = [];
 
   readonly ready;
   private readonly queue = new utils.OperationQueue();
@@ -1111,7 +1200,7 @@ class MTLComputeCommandEncoder {
     this.queue.push(() => this.ready);
   }
 
-  setBytes(buffer: ArrayBuffer|BopArray<unknown>, index: number) {
+  setBytes(buffer: ArrayBuffer|BopArray<unknown>|BopTexture, index: number) {
     this.dataBytes[index] = buffer;
   }
 
@@ -1194,31 +1283,38 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
       const bindGroupEntries: GPUBindGroupEntry[] = [];
       for (let index = 0; index < buffers.length; ++index) {
         const byteArray = buffers[index];
-        let bufferBuffer;
+        let resource: GPUBindingResource|undefined;
         if (byteArray instanceof BopArray) {
-          bufferBuffer = byteArray.getImpl().getGpuBuffer();
+          const bufferBuffer = byteArray.getImpl().getGpuBuffer();
           if (!bufferBuffer) {
             console.log("missing!!!", "byteArray.getImpl().getGpuBuffer();");
             continue;
           }
+          resource = { buffer: bufferBuffer };
+        } else if (byteArray instanceof BopTexture) {
+          const bufferBuffer = byteArray.getTextureView();
+          if (!bufferBuffer) {
+            console.log("missing!!!", "byteArray.getImpl().getGpuTexture();");
+            continue;
+          }
+          resource = bufferBuffer;
         } else {
           if (!byteArray) {
             continue;
           }
           // TODO: Pool allocate TMP buffer.
-          bufferBuffer = device.createBuffer({
+          const bufferBuffer = device.createBuffer({
             size: byteArray.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
           });
           device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
           // console.log("EncoderDrawPrimitives", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
+          resource = { buffer: bufferBuffer };
         }
 
         const bindGroupEntry: GPUBindGroupEntry = {
           binding: index,
-          resource: {
-            buffer: bufferBuffer,
-          }
+          resource: resource
         };
         bindGroupEntries.push(bindGroupEntry);
       }
@@ -1253,40 +1349,52 @@ function EncoderSetComputeBuffer(encoder: MTLComputeCommandEncoder, buffer: BopA
   buffer.getImpl().ensureGpuBuffer();
   encoder.setBytes(buffer, index);
 }
+function EncoderSetComputeTexture(encoder: MTLComputeCommandEncoder, texture: BopTexture, index: number) {
+  // console.log('EncoderSetComputeBuffer', encoder, buffer, offset, index);
+  texture.ensureGpuBuffer();
+  encoder.setBytes(texture, index);
+}
 function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: number) {
   // console.log('EncoderDispatchWorkgroups', encoder, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
     const internals = SharedMTLInternals();
-    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|BopArray<unknown>|undefined>) => {
+    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|BopArray<unknown>|BopTexture|undefined>) => {
       const bindGroupEntries: GPUBindGroupEntry[] = [];
       for (let index = 0; index < buffers.length; ++index) {
         const byteArray = buffers[index];
-        let bufferBuffer;
+        let resource: GPUBindingResource|undefined;
         if (byteArray instanceof BopArray) {
-          bufferBuffer = byteArray.getImpl().getGpuBuffer();
+          const bufferBuffer = byteArray.getImpl().getGpuBuffer();
           if (!bufferBuffer) {
             console.log("missing!!!", "byteArray.getImpl().getGpuBuffer();");
             continue;
           }
+          resource = { buffer: bufferBuffer };
+        } else if (byteArray instanceof BopTexture) {
+          const bufferBuffer = byteArray.getTextureView();
+          if (!bufferBuffer) {
+            console.log("missing!!!", "byteArray.getImpl().getGpuTexture();");
+            continue;
+          }
+          resource = bufferBuffer;
         } else {
           if (!byteArray) {
             continue;
           }
           // TODO: Pool allocate TMP buffer.
-          bufferBuffer = device.createBuffer({
+          const bufferBuffer = device.createBuffer({
             size: byteArray.byteLength,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
           });
           device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
           // console.log("EncoderDispatchWorkgroups", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
+          resource = { buffer: bufferBuffer };
         }
 
         const bindGroupEntry: GPUBindGroupEntry = {
           binding: index,
-          resource: {
-            buffer: bufferBuffer,
-          }
+          resource: resource,
         };
         bindGroupEntries.push(bindGroupEntry);
       }
@@ -1328,11 +1436,11 @@ async function WaitForInternalsReady() {
 }
 
 function InternalMarkFrameStart() {
-  SharedMTLInternals().prepareDebugInOuts();
+  SharedMTLInternals().markFrameStart();
 }
 
 function InternalMarkFrameEnd() {
-  SharedMTLInternals().readbackDebugOuts();
+  SharedMTLInternals().markFrameEnd();
 }
 
 

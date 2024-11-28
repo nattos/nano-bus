@@ -23,11 +23,13 @@ const WEBGPU_GPU_RENAMES: Record<string, string> = {
   'BopLib::float2': 'vec2f',
   'BopLib::float3': 'vec3f',
   'BopLib::float4': 'vec4f',
+  'BopLib::Texture': 'texture_2d<f32>',
   'Array': 'array',
 };
 
 const WEBGPU_CPU_RENAMES: Record<string, string> = {
   'Array': 'BopArray',
+  'Texture': 'BopTexture',
 };
 
 export class CodeTypeSpec {

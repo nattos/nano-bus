@@ -52,7 +52,7 @@ function gpuTest(value: float): float {
   return value + 0.1;
 }
 
-function computeShader(threadId: int, options: { positions: TriangleVertex[] }) {
+function computeShader(threadId: int, options: { positions: TriangleVertex[], texture: Texture }) {
   const positions = options.positions;
   // positions[0] = { position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) };
   // positions[1] = { position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) };
@@ -93,16 +93,18 @@ function drawTriangle() {
   //   return color;
   // }
 
-  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(0);
+  const tex = Texture.persistent(128, 128);
+
+  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
   // positions.push({ position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) });
   // positions.push({ position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) });
   // positions.push({ position: new float4(1, 1.1, 0, 1), color: new float4(1, 1, 1, 1) });
-  positions.push({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
-  positions.push({ position: new float4(1, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
-  positions.push({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
-  // positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
-  // positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
-  // positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions.push({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions.push({ position: new float4(1, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions.push({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
+  positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
   // positions[0].position.x = 0.4;
   // positions[1].position.x = 0.9;
   // const positions = generateTriangleVertices(10);
@@ -121,7 +123,7 @@ function drawTriangle() {
   //   i = i + 1;
   // }
 
-  Gpu.compute(1, computeShader)({ positions: positions });
+  Gpu.compute(1, computeShader)({ positions: positions, texture: tex });
 
   Gpu.renderElements
       (positions.length, vertexShader, fragmentShader)

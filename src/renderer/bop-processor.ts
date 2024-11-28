@@ -56,6 +56,7 @@ export class BopProcessor {
   private readonly resultMap = new Map<BopStage, BopResult>();
 
   readonly privateTypes;
+  readonly libTypes;
 
   constructor(
     public readonly program: ts.Program,
@@ -98,7 +99,6 @@ export class BopProcessor {
     this.undefinedType = this.createInternalType({ identifier: 'UndefinedType', anonymous: true }).type;
     this.undefinedConstant = this.createInternalConstant({ identifier: 'undefined', internalIdentifier: 'kUndefinedValue', type: this.undefinedType });
     this.privateTypes = {
-      Texture: this.createInternalType({ identifier: 'Texture', anonymous: true }).type,
       MTLDevice: this.createInternalType({ identifier: 'id<MTLDevice>', anonymous: true }).type,
       MTLFunction: this.createInternalType({ identifier: 'id<MTLFunction>', anonymous: true }).type,
       MTLRenderPipelineDescriptor: this.createInternalType({ identifier: 'MTLRenderPipelineDescriptor*', anonymous: true }).type,
@@ -117,6 +117,9 @@ export class BopProcessor {
     this.intType = newBopTypeMap.get('int')!.bopType!;
     this.floatType = newBopTypeMap.get('float')!.bopType!;
     this.float4Type = newBopTypeMap.get('float4')!.bopType!;
+    this.libTypes = {
+      Texture: newBopTypeMap.get('Texture')!.bopType!,
+    };
     // this.typeMap.set(this.tc.getNumberType(), this.intType); // TODO: FIX!!!
 
     for (const type of libTypes.values()) {
@@ -2116,7 +2119,12 @@ const instanceVars = {};
         existingTypeInfo = { identifier, innerScope, fieldIdentifierMap };
         this.typeCoalesceMap.set(structureKey, existingTypeInfo);
 
-        const structWriter = this.writer.global.writeStruct(identifier.identifierToken).body;
+        const structWriterOuter = this.writer.global.writeStruct(identifier.identifierToken);
+        structWriterOuter.touchedByProxy = {
+          get touchedByCpu() { return structOf.touchedByCpu; },
+          get touchedByGpu() { return structOf.touchedByGpu; },
+        };
+        const structWriter = structWriterOuter.body;
         for (const property of fields) {
           const fieldIdentifier = innerScope.allocateVariableIdentifier(property.type.tempType, BopIdentifierPrefix.Field, property.identifier);
           structWriter.writeField(fieldIdentifier.identifierToken, property.type.tempType);
@@ -2167,6 +2175,8 @@ const instanceVars = {};
       const structOf = new BopStructType(
         fields.map(f => fieldMap.get(f.identifier)!),
       );
+      structOf.touchedByCpu = true;
+      structOf.touchedByGpu = true;
 
       const newType = BopType.createPassByValue({
           debugName: shortName,
