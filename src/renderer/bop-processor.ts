@@ -6,6 +6,12 @@ import { getNodeLabel, tsGetMappedType, tsGetSourceFileOfNode, tsGetSyntaxTypeLa
 import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction, BopVariable, BopReference, BopGenericFunctionInstance, BopInferredNumberType, BopAuxTypeInference } from './bop-data';
 import { loadBopLib, toStringResolvedType } from './bop-lib-loader';
 import { bopRewriteShaderFunction, bopShaderBinding, FuncMutatorFunc, GpuBindings } from './bop-shader-binding';
+import { BapBlockVisitor, BapGlobalBlockVisitor } from './bap-block-visitor';
+import { BapGenerateCache, BapGenerateContext, BapScope } from './bap-value';
+
+
+
+
 
 
 
@@ -17,6 +23,14 @@ interface CoersionRef {
 
 
 export class BopProcessor {
+
+
+
+
+
+
+
+
   readonly tc: ts.TypeChecker;
   readonly writer = new CodeWriter();
   readonly globalBlock: BopBlock;
@@ -501,6 +515,9 @@ const instanceVars = {};
     }
 
     if (ts.isSourceFile(node)) {
+      const context = BapGenerateContext.root();
+      new BapGlobalBlockVisitor(this).visitSourceFile(node)?.generateRead(context)?.writeIntoExpression?.(this.blockWriter)?.(this.blockWriter.writeExpressionStatement().expr);
+
       for (const statement of node.statements) {
         if (ts.isInterfaceDeclaration(statement)) {
           // const newType = this.resolveType(this.tc.getTypeAtLocation(statement));

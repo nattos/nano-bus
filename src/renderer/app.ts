@@ -41,7 +41,7 @@ export interface QueryToken {
 }
 
 
-const initialCode = `
+const initialCode2 = `
 
 interface TriangleVertex {
   /* @position */ position: float4;
@@ -132,7 +132,14 @@ function drawTriangle() {
 }
 `;
 
-
+const initialCode = `
+function test2() {
+  return 1 + 2;
+}
+function test() {
+  test2() + 3;
+}
+`;
 
 
 
@@ -149,7 +156,7 @@ export class NanoApp extends LitElement {
   @query('#query-input') queryInputElement!: HTMLInputElement;
   @query('#gpu-canvas') gpuCanvas!: HTMLCanvasElement;
   @property() overlay?: Overlay;
-  @property() windowActive = true;
+  @property({ attribute: false }) windowActive = true;
   @observable dragDropState = DragDropState.NotStarted;
 
   @observable codeLines: CodeLine[] = [];
