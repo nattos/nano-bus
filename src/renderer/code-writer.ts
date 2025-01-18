@@ -16,6 +16,7 @@ export enum CodePrimitiveType {
 
 const WEBGPU_GPU_RENAMES: Record<string, string> = {
   'BopLib::int': 'i32',
+  'int32_t': 'i32',
   'BopLib::int2': 'vec2i',
   'BopLib::int3': 'vec3i',
   'BopLib::int4': 'vec4i',
@@ -28,6 +29,7 @@ const WEBGPU_GPU_RENAMES: Record<string, string> = {
 };
 
 const WEBGPU_CPU_RENAMES: Record<string, string> = {
+  'int32_t': 'BopLib.int',
   'Array': 'BopArray',
   'Texture': 'BopTexture',
 };
@@ -1034,6 +1036,12 @@ export class CodeStatementWriter implements CodeWriterFragment {
       this.writeFinalizeLine(stream, context);
     });
   }
+  writeContinueStatement() {
+    this.pushWriterFunc((stream, context) => {
+      stream.writeToken('continue');
+      this.writeFinalizeLine(stream, context);
+    });
+  }
 }
 
 export class CodeBranchWriter {
@@ -1542,6 +1550,33 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
     });
     return result;
   }
+  writeInlineConditional(): { cond: CodeExpressionWriter, then: CodeExpressionWriter, else: CodeExpressionWriter } {
+    const result = {
+      cond: new CodeExpressionWriter(),
+      then: new CodeExpressionWriter(),
+      else: new CodeExpressionWriter(),
+    };
+    this.setWriter((stream, context) => {
+      stream.writeToken('(');
+      stream.writeToken('(');
+      result.cond.writerFunc(stream, context);
+      stream.writeToken(')');
+      stream.writeWhitespace();
+      stream.writeToken('?');
+      stream.writeWhitespace();
+      stream.writeToken('(');
+      result.then.writerFunc(stream, context);
+      stream.writeToken(')');
+      stream.writeWhitespace();
+      stream.writeToken(':');
+      stream.writeWhitespace();
+      stream.writeToken('(');
+      result.else.writerFunc(stream, context);
+      stream.writeToken(')');
+      stream.writeToken(')');
+    });
+    return result;
+  }
 }
 
 
@@ -1606,7 +1641,9 @@ export class CodeTextStream {
     if (this.context.platform === CodeWriterPlatform.WebGPU && !this.context.isGpu) {
       // JavaScript fun.
       if (typeSpec.asPrimitive) {
-        this.writeToken(typeSpec.asPrimitive);
+        let str: string = typeSpec.asPrimitive;
+        str = WEBGPU_CPU_RENAMES[str] ?? str;
+        this.writeToken(str);
       } else if (typeSpec.asStruct) {
         this.writeToken(typeSpec.asStruct);
       } else {
@@ -1634,7 +1671,11 @@ export class CodeTextStream {
       }
     }
     if (typeSpec.asPrimitive) {
-      this.writeToken(typeSpec.asPrimitive);
+      let str: string = typeSpec.asPrimitive;
+      if (this.context.platform === CodeWriterPlatform.WebGPU && this.context.isGpu) {
+        str = WEBGPU_GPU_RENAMES[str] ?? str;
+      }
+      this.writeToken(str);
     } else if (typeSpec.asStruct) {
       this.writeToken(typeSpec.asStruct);
     } else {

@@ -1,7 +1,14 @@
+import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
-import { BapBlockVisitor, BapVariableDeclarationVisitor, BapNewExpressionVisitor, BapBinaryExpressionVisitor, BapBooleanLiteralVisitor, BapNumericLiteralVisitor, BapCallExpressionVisitor, BapIdentifierExpressionVisitor, BapReturnStatementVisitor } from "./bap-block-visitor";
-import { BapSubtreeGenerator } from "./bap-value";
+import { BapFields, BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec, BapWriteAsStatementFunc, BapWriteIntoExpressionFunc } from "./bap-value";
 import { getNodeLabel } from "./ts-helpers";
+import { CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
+import { BopIdentifierPrefix } from './bop-data';
+import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
+
+type AnyPossibleNode<TType extends ts.SyntaxKind> = ts.Node&{ readonly kind: TType };
+export type BapVisitorImpl<TNode> = BapVisitor&{ impl(node: TNode|Node): BapSubtreeGenerator|undefined; };
+type BapVisitorImplConstructor<TNode> = { new (): BapVisitorImpl<TNode>; };
 
 export interface BapVisitorRootContext {
   readonly program: ts.Program;
@@ -9,8 +16,14 @@ export interface BapVisitorRootContext {
   readonly tc: ts.TypeChecker;
 }
 
+interface VistorDecl {
+  predicate?: (node: ts.Node) => boolean;
+  visit: (node: ts.Node) => BapSubtreeGenerator|undefined;
+}
+
 export class BapVisitor {
   protected static currentParent?: BapVisitor;
+  private static readonly nodeTypeMap = new Map<ts.SyntaxKind, Array<VistorDecl>>();
 
   readonly program: ts.Program;
   readonly sourceRoot: ts.SourceFile;
@@ -26,7 +39,10 @@ export class BapVisitor {
     this.tc = parentContext.tc;
   }
 
-  protected child(node: ts.Node): BapSubtreeGenerator|undefined {
+  protected child(node: ts.Node|undefined): BapSubtreeGenerator|undefined {
+    if (!node) {
+      return;
+    }
     const oldParent = BapVisitor.currentParent;
     BapVisitor.currentParent = this;
     try {
@@ -36,464 +52,549 @@ export class BapVisitor {
     }
   }
   protected visitChildImpl(node: ts.Node): BapSubtreeGenerator|undefined {
-    const delegateToChild = (child: ts.Node) => this.visitChildImpl(child);
-
-    if (ts.isBlock(node)) {
-      return new BapBlockVisitor().impl(node);
-    } else if (ts.isExpressionStatement(node)) {
-      return delegateToChild(node.expression);
-      // const exprResult = this.delegateToChild(node.expression);
-      // const innerProduceResult = exprResult.produceResult;
-      // if (innerProduceResult) {
-      //   exprResult.produceResult = () => {
-      //     const innerResult = innerProduceResult();
-      //     if (innerResult) {
-      //       innerResult.exportDebugOut ??= {
-      //         lineNumber: this.getNodeLineNumber(node),
-      //       };
-      //     }
-      //     return innerResult;
-      //   };
-      // }
-      // this.addDebugOut(node.getStart(), exprResult);
-      // return exprResult;
-    } else if (ts.isVariableStatement(node) || ts.isVariableDeclarationList(node)) {
-      return new BapVariableDeclarationVisitor().impl(node);
-    } else if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
-      // const oldAsAssignableRef = this.asAssignableRef;
-      // this.asAssignableRef = true;
-      // const refExpr = this.visitChild(node.left);
-      // this.asAssignableRef = oldAsAssignableRef;
-
-      // if (!this.check(refExpr.isAssignableRef === true, `LHS expression is not assignable.`)) {
-      //   return;
-      // }
-
-      // const valueExpr = this.visitChild(node.right);
-      // const valueAuxType = valueExpr.getAuxTypeInference?.();
-      // const assignType = valueAuxType?.bopType ?? this.resolveType(this.tc.getTypeAtLocation(node.left));
-
-      // return {
-      //   produceResult: () => {
-      //     const [value, valueRef] = this.writeCoersionFromExprPair(valueExpr, assignType, this.blockWriter);
-
-      //     const refResult = this.readFullResult(refExpr);
-      //     const propAccessor = refResult?.expressionResult?.propertyResult;
-      //     if (propAccessor) {
-      //       // This is calling a setter property.
-      //       const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.setter, thisVar: refResult.thisResult, functionOf: propAccessor.setter.bopType.functionOf!.overloads[0] }), [value]);
-      //       if (!callBop) {
-      //         return;
-      //       }
-      //       this.doProduceResult(callBop);
-      //       return { expressionResult: valueRef };
-      //     }
-
-      //     const oldAsAssignableRef = this.asAssignableRef;
-      //     this.asAssignableRef = true;
-      //     const [ref, refVar] = this.writeCoersionFromExprPair(refExpr, assignType, this.blockWriter);
-      //     this.asAssignableRef = oldAsAssignableRef;
-
-      //     const ret = this.blockWriter.writeAssignmentStatement();
-      //     if (refVar.requiresDirectAccess) {
-      //       // HACK!!! ???
-      //       ret.ref.writeDereferenceExpr().value.writeVariableReferenceReference(ref);
-      //     } else {
-      //       ret.ref.writeVariableDereference(ref);
-      //     }
-      //     ret.value.writeVariableReference(value);
-      //     return { expressionResult: valueRef };
-      //   },
-      // };
-    } else if (ts.isReturnStatement(node)) {
-      return new BapReturnStatementVisitor().impl(node);
-    } else if (ts.isIfStatement(node)) {
-      // const condBop = this.visitChild(node.expression);
-      // const branches: BopBlock[] = [ this.visitInBlock(node.thenStatement, CodeScopeType.Local) ];
-      // if (node.elseStatement) {
-      //   branches.push(this.visitInBlock(node.elseStatement, CodeScopeType.Local));
-      // }
-      // return {
-      //   produceResult: () => {
-      //     const condVar = this.writeCoersionFromExpr(condBop, this.booleanType, this.blockWriter);
-      //     const ret = this.blockWriter.writeConditional(branches.length);
-      //     ret.branches[0].condWriter.writeVariableReference(condVar);
-      //     this.writeBlock(branches[0], ret.branches[0].blockWriter);
-      //     return {};
-      //   },
-      // };
-    } else if (ts.isForOfStatement(node)) {
-      // if (!node.initializer ||
-      //     !ts.isVariableDeclarationList(node.initializer) ||
-      //     node.initializer.declarations.length !== 1) {
-      //   this.logAssert(`Malformed for statement.`);
-      //   return;
-      // }
-      // const variableDeclNode = node.initializer.declarations[0];
-      // const variableName = variableDeclNode.name.getText();
-      // const enumerableType = this.resolveType(this.tc.getTypeAtLocation(node.expression));
-      // const elementType = this.resolveType(this.tc.getTypeAtLocation(variableDeclNode));
-      // const elementRawType = enumerableType.internalTypeOf?.arrayOfType;
-      // if (!this.verifyNotNulllike(elementRawType, `Unsupported enumeration over ${enumerableType.debugName}.`)) {
-      //   return;
-      // }
-
-      // const enumerableBop = this.visitChild(node.expression);
-      // const oldBlock = this.block;
-      // const innerBlock = oldBlock.createChildBlock(CodeScopeType.Local);
-      // const elementBopVar = innerBlock.mapTempIdentifier(variableName, elementType);
-
-      // this.block = innerBlock;
-      // const body = this.visitInBlock(node.statement, CodeScopeType.Local);
-      // this.block = oldBlock;
-
-      // return {
-      //   produceResult: () => {
-      //     const indexVar = this.blockWriter.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'index');
-      //     const lengthVar = this.blockWriter.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'length');
-      //     this.blockWriter.writeVariableDeclaration(indexVar).initializer.writeExpression().writeLiteralInt(0);
-      //     this.blockWriter.writeVariableDeclaration(lengthVar)
-      //         .initializer.writeExpression().writePropertyAccess(this.writer.makeInternalToken('length'))
-      //         .source.writeVariableReference(this.readResult(enumerableBop).result!);
-
-      //     const whileLoop = this.blockWriter.writeWhileLoop();
-      //     const whileCond = whileLoop.condition;
-      //     const whileBody = whileLoop.body;
-
-      //     const breakCond = whileBody.writeConditional(1).branches[0];
-      //     const breakCondExpr = breakCond.condWriter.writeUnaryOperation(CodeUnaryOperator.LogicalNot).value.writeBinaryOperation(CodeBinaryOperator.LessThan);
-      //     breakCondExpr.lhs.writeVariableReference(indexVar);
-      //     breakCondExpr.rhs.writeVariableReference(lengthVar);
-      //     breakCond.blockWriter.writeBreakStatement();
-
-      //     const elementVar = whileBody.scope.allocateVariableIdentifier(elementBopVar.type, BopIdentifierPrefix.Local, elementBopVar.nameHint);
-      //     elementBopVar.result = elementVar;
-      //     const elementAccess = whileBody.writeVariableDeclaration(elementVar).initializer.writeExpression().writeIndexAccess();
-      //     elementAccess.index.writeVariableReference(indexVar);
-      //     elementAccess.source.writeVariableReference(this.readResult(enumerableBop).result!);
-      //     whileCond.writeLiteralBool(true);
-
-      //     const incrementStmt = whileBody.writeAssignmentStatement();
-      //     incrementStmt.ref.writeVariableReference(indexVar);
-      //     const incrementExpr = incrementStmt.value.writeBinaryOperation(CodeBinaryOperator.Add);
-      //     incrementExpr.lhs.writeVariableReference(indexVar);
-      //     incrementExpr.rhs.writeLiteralInt(1);
-
-      //     this.writeBlock(body, whileBody);
-      //     return {};
-      //   },
-      // };
-    } else if (ts.isForStatement(node)) {
-      // if (!(node.initializer && node.condition && node.incrementor)) {
-      //   this.logAssert(`Malformed for statement.`);
-      //   return;
-      // }
-      // const initializerBop = this.visitInBlock(node.initializer, CodeScopeType.Local);
-      // const oldBlock = this.block;
-      // this.block = initializerBop;
-      // const conditionBop = this.visitInBlockFull(node.condition, CodeScopeType.Local);
-      // const updateBop = this.visitInBlock(node.incrementor, CodeScopeType.Local);
-      // const body = this.visitInBlock(node.statement, CodeScopeType.Local);
-      // this.block = oldBlock;
-
-      // return {
-      //   produceResult: () => {
-      //     this.writeBlock(initializerBop, this.blockWriter);
-      //     const whileLoop = this.blockWriter.writeWhileLoop();
-      //     const whileCond = whileLoop.condition;
-      //     const whileBody = whileLoop.body;
-      //     whileCond.writeLiteralBool(true);
-      //     this.writeBlock(conditionBop.block, whileBody);
-      //     const condVar = this.writeCoersionFromExpr(conditionBop.bop, this.booleanType, whileBody);
-      //     const breakCond = whileBody.writeConditional(1).branches[0];
-      //     breakCond.condWriter.writeUnaryOperation(CodeUnaryOperator.LogicalNot).value.writeVariableReference(condVar);
-      //     breakCond.blockWriter.writeBreakStatement();
-
-      //     this.writeBlock(body, whileBody);
-      //     this.writeBlock(updateBop, whileBody);
-      //     return {};
-      //   },
-      // };
-    } else if (ts.isWhileStatement(node)) {
-      // const oldBlock = this.block;
-      // const innerBlock = oldBlock.createChildBlock(CodeScopeType.Local);
-      // this.block = innerBlock;
-      // const conditionBop = this.visitInBlockFull(node.expression, CodeScopeType.Local);
-      // const body = this.visitInBlock(node.statement, CodeScopeType.Local);
-      // this.block = oldBlock;
-
-      // return {
-      //   produceResult: () => {
-      //     const whileLoop = this.blockWriter.writeWhileLoop();
-      //     const whileCond = whileLoop.condition;
-      //     const whileBody = whileLoop.body;
-      //     whileCond.writeLiteralBool(true);
-      //     this.writeBlock(conditionBop.block, whileBody);
-      //     const condVar = this.writeCoersionFromExpr(conditionBop.bop, this.booleanType, whileBody);
-      //     const breakCond = whileBody.writeConditional(1).branches[0];
-      //     breakCond.condWriter.writeUnaryOperation(CodeUnaryOperator.LogicalNot).value.writeVariableReference(condVar);
-      //     breakCond.blockWriter.writeBreakStatement();
-
-      //     this.writeBlock(body, whileBody);
-      //     return {};
-      //   },
-      // };
-    } else if (ts.isPropertyAccessExpression(node)) {
-      // const fromBop = this.visitChild(node.expression);
-      // return {
-      //   resolveIdentifiers: () => {
-      //   },
-      //   produceResult: () => {
-      //     const fromBopVar = this.readResult(fromBop);
-      //     const fromVar = fromBopVar.result!;
-      //     const propertyRef = createBopReference(node.name.text, fromBopVar.lookupBlockOverride ?? fromBopVar.bopType.innerBlock);
-      //     this.resolve(propertyRef);
-
-      //     if (!this.verifyNotNulllike(propertyRef.resolvedRef, `Property ${propertyRef.identifier} is undefined.`)) {
-      //       return;
-      //     }
-      //     const outBopType = propertyRef.resolvedRef.bopType;
-      //     const isProperty = !!propertyRef.resolvedRef.propertyResult;
-      //     let outType = propertyRef.resolvedRef.type;
-      //     let isDirectAccess = false;
-      //     if (asAssignableRef) {
-      //       outType = outType.toReference();
-      //       if (isProperty || outType.asPrimitive === CodePrimitiveType.Function) {
-      //         isDirectAccess = true;
-      //       }
-      //     }
-      //     if (propertyRef.resolvedRef.requiresDirectAccess) {
-      //       isDirectAccess = true;
-      //     }
-
-      //     let outBopVar;
-      //     if (isDirectAccess) {
-      //       outBopVar = propertyRef.resolvedRef;
-      //     } else {
-      //       const propAccessor = propertyRef.resolvedRef.propertyResult;
-      //       const propVar = propertyRef.resolvedRef.result;
-      //       if (propAccessor) {
-      //         // This is calling a getter property.
-      //         const callBop = this.makeCallBop(node, () => utils.upcast({ functionVar: propAccessor.getter, thisVar: fromBopVar, functionOf: propAccessor.getter.bopType.functionOf!.overloads[0] }), []);
-      //         if (!callBop) {
-      //           return;
-      //         }
-      //         this.doProduceResult(callBop);
-      //         const result = this.readResult(callBop);
-      //         result.requiresDirectAccess = fromBopVar.requiresDirectAccess;
-      //         return {
-      //           expressionResult: result,
-      //           thisResult: fromBopVar,
-      //         };
-      //       } else if (propVar) {
-      //         const [outVar, outTmpBopVar] = allocTmpOut(outType, outBopType, node.name.text);
-      //         outBopVar = outTmpBopVar;
-      //         const ret = this.blockWriter.writeVariableDeclaration(outVar);
-      //         let accessExpr = ret.initializer.writeExpression();
-      //         if (fromBopVar.requiresDirectAccess) {
-      //           accessExpr = accessExpr.writeDereferenceExpr().value;
-      //         }
-      //         let sourceExpr;
-      //         if (fromBopVar.requiresDirectAccess) {
-      //           sourceExpr = accessExpr.writePropertyReferenceAccess(propVar.identifierToken).source;
-      //         } else {
-      //           sourceExpr = accessExpr.writePropertyAccess(propVar.identifierToken).source;
-      //         }
-      //         sourceExpr.writeVariableReference(fromVar);
-      //       } else {
-      //         this.logAssert(`Property ${propertyRef.identifier} is undefined.`);
-      //         return;
-      //       }
-      //       outBopVar.requiresDirectAccess = fromBopVar.requiresDirectAccess;
-      //     }
-      //     return {
-      //       expressionResult: outBopVar,
-      //       thisResult: fromBopVar,
-      //     };
-      //   },
-      //   isAssignableRef: asAssignableRef && fromBop.isAssignableRef,
-      // };
-    } else if (ts.isElementAccessExpression(node)) {
-      // const indexBop = this.visitChild(node.argumentExpression);
-      // const fromBop = this.visitChild(node.expression);
-      // const resultType = this.resolveType(this.tc.getTypeAtLocation(node));
-      // return {
-      //   resolveIdentifiers: () => {
-      //   },
-      //   produceResult: () => {
-      //     const indexBopVar = this.readResult(indexBop);
-      //     const fromBopVar = this.readResult(fromBop);
-
-      //     let outType = resultType.tempType;
-      //     let isDirectAccess = false;
-      //     if (asAssignableRef) {
-      //       outType = outType.toReference();
-      //       isDirectAccess = true;
-      //     }
-
-      //     const [accessVar, accessBopVar] = allocTmpOut(outType, resultType);
-      //     const indexAccess = this.blockWriter.writeVariableDeclaration(accessVar).initializer.writeExpression().writeIndexAccess();
-      //     indexAccess.source.writeVariableReference(fromBopVar.result!);
-      //     indexAccess.index.writeVariableReference(indexBopVar.result!);
-      //     accessBopVar.requiresDirectAccess = isDirectAccess;
-      //     return {
-      //       expressionResult: accessBopVar,
-      //     };
-      //   },
-      //   isAssignableRef: asAssignableRef,
-      // };
-    } else if (ts.isIdentifier(node) || tsIsThisExpression(node)) {
-      return new BapIdentifierExpressionVisitor().impl(node);
-    } else if (ts.isCallExpression(node)) {
-      return new BapCallExpressionVisitor().impl(node);
-    } else if (ts.isObjectLiteralExpression(node)) {
-      // const willCoerceFieldsTo = new Map<string, CoersionRef>();
-      // const initializers: Array<{ field: string, valueBop: BopStage, propertyRef: () => BopReference }> = [];
-      // for (const p of node.properties) {
-      //   if (ts.isPropertyAssignment(p)) {
-      //     const field = p.name.getText();
-      //     const valueBop = this.visitChild(p.initializer);
-      //     initializers.push({ field, valueBop, propertyRef: utils.lazy(() => createBopReference(field, asType.innerBlock)) });
-      //     willCoerceFieldsTo.set(field, { assignedFromBop: valueBop });
-      //   } else {
-      //     this.logAssert(`Unknown object literal syntax.`);
-      //     continue;
-      //   }
-      // }
-
-      // const asType = this.resolveType(this.tc.getTypeAtLocation(node), { willCoerceFieldsTo });
-      // // const storage = createStorage(asType);
-
-      // return {
-      //   resolveIdentifiers: () => {
-      //     initializers.forEach(e => this.resolve(e.propertyRef()));
-      //   },
-      //   // resolveStorage: () => {
-      //   //   this.resolveStorage(storage);
-      //   // },
-      //   produceResult: () => {
-      //     const initializerVars: Array<{ identifierToken: CodeNamedToken, valueVar: CodeVariable }> = [];
-      //     for (const initializer of initializers) {
-      //       const prop = initializer.propertyRef().resolvedRef;
-      //       const propRef = prop?.result;
-      //       if (!this.verifyNotNulllike(prop, `Property ${initializer.field} is undefined.`) ||
-      //           !this.verifyNotNulllike(propRef, `Property ${initializer.field} is undefined.`)) {
-      //         return;
-      //       }
-      //       initializerVars.push({ identifierToken: propRef.identifierToken, valueVar: this.writeCoersionFromExpr(initializer.valueBop, prop.bopType, this.blockWriter) });
-      //     }
-
-      //     const [outVar, outBopVar] = allocTmpOut(asType.tempType, asType, asType.debugName);
-      //     const ret = this.blockWriter.writeVariableDeclaration(outVar);
-      //     for (const initializer of initializerVars) {
-      //       ret.initializer.writeAssignStructField(initializer.identifierToken).value.writeVariableReference(initializer.valueVar);
-      //     }
-      //     return { expressionResult: outBopVar };
-      //   },
-      // };
-    } else if (ts.isNewExpression(node)) {
-      return new BapNewExpressionVisitor().impl(node);
-    } else if (ts.isPrefixUnaryExpression(node)) {
-      // const opType =
-      //     // node.operator === ts.SyntaxKind.PlusPlusToken ? CodeUnaryOperator.PlusPlus :
-      //     // node.operator === ts.SyntaxKind.MinusMinusToken ? CodeUnaryOperator.MinusMinus :
-      //     node.operator === ts.SyntaxKind.PlusToken ? CodeUnaryOperator.Plus :
-      //     node.operator === ts.SyntaxKind.MinusToken ? CodeUnaryOperator.Negate :
-      //     node.operator === ts.SyntaxKind.TildeToken ? CodeUnaryOperator.BitwiseNegate :
-      //     node.operator === ts.SyntaxKind.ExclamationToken ? CodeUnaryOperator.LogicalNot :
-      //     undefined;
-      // if (!this.verifyNotNulllike(opType, `Unknown operator ${node.operator}.`)) {
-      //   return;
-      // }
-
-      // const isLogicalOp =
-      //     opType === CodeUnaryOperator.Negate ||
-      //     false;
-
-      // const opName = utils.findEnumName(CodeUnaryOperator, opType);
-      // const customOperatorName = `operator${opName}`;
-
-      // const lhs = this.visitChild(node.operand);
-      // const lhsRawType = this.filterWouldBeAny(this.resolveType(this.tc.getTypeAtLocation(node.operand), { allowWouldBeAny: true }));
-
-      // let exprType: BopType;
-      // let lhsType: BopType;
-      // let customOperator: { bopVar: BopVariable, functionOf: BopFunctionType }|undefined = undefined;
-      // const thisStage: BopStage = {
-      //   getAuxTypeInference: () => {
-      //     // TODO: Support operators with different type patterns.
-      //     const lhsAuxType = lhs.getAuxTypeInference?.();
-      //     const lhsCustomOperatorType = this.makeCustomOperatorType(lhsRawType, lhsAuxType);
-      //     if (lhsCustomOperatorType) {
-      //       const lhsCustomOperator = lhsCustomOperatorType?.innerBlock.identifierMap.get(customOperatorName);
-      //       const lhsOverloads = lhsCustomOperator?.bopType.functionOf?.overloads;
-      //       if (lhsOverloads) {
-      //         let overloads = lhsOverloads;
-      //         const resolvedCustomOperator = this.resolveFunctionOverload(overloads, [ lhsCustomOperatorType ]);
-
-      //         if (resolvedCustomOperator) {
-      //           customOperator = { bopVar: lhsCustomOperator!, functionOf: resolvedCustomOperator };
-      //           lhsType = resolvedCustomOperator.args[0].type;
-      //           exprType = resolvedCustomOperator.returnType;
-      //           return { bopType: resolvedCustomOperator.returnType };
-      //         }
-      //       }
-      //     }
-
-      //     if (isLogicalOp) {
-      //       exprType = this.booleanType;
-      //       lhsType = lhsCustomOperatorType ?? exprType;
-      //       return {};
-      //     }
-
-      //     if (lhsAuxType) {
-      //       const asInt = lhsAuxType?.numberType === BopInferredNumberType.Int;
-      //       exprType = asInt ? this.intType : this.floatType;
-      //     } else {
-      //       exprType = this.resolveType(this.tc.getTypeAtLocation(node));
-      //     }
-      //     lhsType = exprType;
-      //     return { numberType: exprType === this.intType ? BopInferredNumberType.Int : BopInferredNumberType.Float };
-      //   },
-      //   produceResult: () => {
-      //     thisStage.getAuxTypeInference!();
-      //     const lhsVar = this.writeCoersionFromExpr(lhs, lhsType, this.blockWriter);
-      //     if (customOperator) {
-      //       const resolvedFunc = { functionVar: customOperator.bopVar, thisVar: undefined, functionOf: customOperator.functionOf };
-      //       const callBop = this.makeCallBop(node, () => resolvedFunc, [ lhsVar ]);
-      //       if (!callBop) {
-      //         return;
-      //       }
-      //       this.doProduceResult(callBop);
-      //       return { expressionResult: this.readResult(callBop) };
-      //     } else {
-      //       const [outVar, outBopVar] = allocTmpOut(exprType.storageType, exprType, opName);
-      //       const ret = this.blockWriter.writeVariableDeclaration(outVar);
-      //       const op = ret.initializer.writeExpression().writeUnaryOperation(opType);
-      //       op.value.writeVariableReference(lhsVar);
-      //       return { expressionResult: outBopVar };
-      //     }
-      //   },
-      // };
-      // return thisStage;
-    } else if (ts.isBinaryExpression(node)) {
-      return new BapBinaryExpressionVisitor().impl(node);
-    } else if (ts.isParenthesizedExpression(node)) {
-      // return this.delegateToChild(node.expression);
-      return delegateToChild(node);
-    } else if (ts.isNumericLiteral(node)) {
-      return new BapNumericLiteralVisitor().impl(node);
-    } else if (
-        tsIsTrueLiteral(node) ||
-        tsIsFalseLiteral(node)) {
-      return new BapBooleanLiteralVisitor().impl(node);
+    let child: BapSubtreeGenerator|undefined = undefined;
+    const visitors = BapVisitor.nodeTypeMap.get(node.kind);
+    if (visitors) {
+      for (const visitorDecl of visitors) {
+        if (visitorDecl.predicate) {
+          if (!visitorDecl.predicate(node)) {
+            continue;
+          }
+        }
+        child = visitorDecl.visit(node);
+        break;
+      }
     }
-    this.logAssert(`Unsupported syntax ${getNodeLabel(node)}.`);
-
-    return;
+    if (!this.verifyNotNulllike(child, `Unsupported syntax ${getNodeLabel(node)}`)) {
+      return;
+    }
+    return child;
+  }
+  static visit(node: ts.Node): BapSubtreeGenerator|undefined {
+    let child: BapSubtreeGenerator|undefined = undefined;
+    const visitors = BapVisitor.nodeTypeMap.get(node.kind);
+    if (visitors) {
+      for (const visitorDecl of visitors) {
+        if (visitorDecl.predicate) {
+          if (!visitorDecl.predicate(node)) {
+            continue;
+          }
+        }
+        child = visitorDecl.visit(node);
+        break;
+      }
+    }
+    return child;
   }
 
-  verify<T>(value: T, errorFormatter: (() => string)|string, predicate?: (v: T) => boolean): T {
+  // TODO: Move to type resolver with cache!!!
+  protected primitiveType(primitiveType: CodePrimitiveType): BapTypeGenerator {
+    return {
+      generate: (context) => {
+        return {
+          prototypeScope: new BapPrototypeScope(), // TODO: Fix!!!
+          codeTypeSpec: CodeTypeSpec.fromPrimitive(primitiveType),
+        };
+      },
+    };
+  }
+
+  // TODO: Move to type resolver with cache!!!
+  static primitiveTypeSpec(primitiveType: CodePrimitiveType): BapTypeSpec {
+    return {
+      prototypeScope: new BapPrototypeScope(), // TODO: Fix!!!
+      codeTypeSpec: CodeTypeSpec.fromPrimitive(primitiveType),
+    };
+  }
+
+  // TODO: Move to type resolver with cache!!!
+  protected type(nodeOrType: ts.Node|ts.Type): BapTypeGenerator {
+    let tsType: ts.Type;
+    let maybeNode = nodeOrType as ts.Node;
+    let maybeType = nodeOrType as ts.Type;
+    if (maybeNode.kind) {
+      tsType = this.tc.getTypeAtLocation(maybeNode);
+    } else {
+      tsType = maybeType;
+    }
+    return {
+      generate: (context) => {
+        const isObject = (tsType.flags & ts.TypeFlags.Object) === ts.TypeFlags.Object;
+        const objectFlags = isObject ? (tsType as ts.ObjectType).objectFlags : ts.ObjectFlags.None;
+        const isReference = (objectFlags & ts.ObjectFlags.Reference) === ts.ObjectFlags.Reference;
+        const isClassOrInterface = !!(objectFlags & ts.ObjectFlags.ClassOrInterface);
+        const isGeneric = isReference && ((tsType as ts.TypeReference)?.typeArguments?.length ?? 0) > 0;
+        const genericBase: ts.BaseType|undefined = isReference ? ((tsType as any).target as ts.TypeReference) : undefined;
+        const isGenericBase = isGeneric && genericBase === tsType;
+        if (isGenericBase) {
+          return this.errorType;
+        }
+        const requiresGenericLookup = isReference;
+        const isTypeParameter = tsType.isTypeParameter();
+        const requiresFullLookup = requiresGenericLookup || isTypeParameter;
+
+        let found: BapTypeGenerator|undefined = undefined;
+        // let found = !requiresFullLookup && this.typeMap.get(tsType);
+        // // let found = this.typeMap.get(type) ?? this.typeSymbolMap.get(type.symbol);
+        // if (found) {
+        //   return found;
+        // }
+
+        if (tsType === this.tc.getNumberType()) {
+          // if (options?.willCoerceTo?.assignedFromBop) {
+          //   const auxTypeInference = options.willCoerceTo.assignedFromBop.getAuxTypeInference?.();
+          //   if (auxTypeInference?.numberType === BopInferredNumberType.Float) {
+          //     return this.floatType;
+          //   } else if (auxTypeInference?.numberType === BopInferredNumberType.Int) {
+          //     return this.intType;
+          //   }
+          // }
+          // return this.intType;
+          found = this.primitiveType(CodePrimitiveType.Int);
+        }
+
+        if ((tsType.flags & ts.TypeFlags.NumberLiteral) === ts.TypeFlags.NumberLiteral) {
+          found = this.primitiveType(CodePrimitiveType.Int);
+        } else if ((tsType.flags & ts.TypeFlags.BooleanLiteral) === ts.TypeFlags.BooleanLiteral) {
+          found = this.primitiveType(CodePrimitiveType.Bool);
+        } else if ((tsType.flags & ts.TypeFlags.Undefined) === ts.TypeFlags.Undefined) {
+          // found = this.primitiveType(CodePrimitiveType.Undefined);
+        }
+        if (found) {
+          return found.generate(context);
+        }
+
+        const parentCodeScope = context.globalWriter.global.scope;
+        // const parentBlock = this.globalBlock;
+        const shortName = this.stringifyType(tsType);
+
+        // Create a new type.
+        if (!this.check((tsType.flags & ts.TypeFlags.Any) !== ts.TypeFlags.Any, `Type ${utils.stringEmptyToNull(shortName) ?? 'any'} is disallowed.`)) {
+          return;
+          // return options?.allowWouldBeAny ? this.wouldBeAnyType : this.errorType;
+        }
+        // if (!this.check(!this.resolvingSet.has(tsType), `Type ${shortName} is recursive.`)) {
+        //   return this.errorType;
+        // }
+
+        // Resolve types, that might contain type parameters.
+        // const resolveInnerTypeRef = (t: ts.Type): BopType|undefined => {
+        //   if (!t.symbol) {
+        //     return this.resolveType(t, { inBlock: thisBlock });
+        //   }
+        //   const typeRef = new BopReference(t.symbol.name, thisBlock);
+        //   this.resolve(typeRef);
+        //   if (typeRef.resolvedRef) {
+        //     return typeRef.resolvedRef?.typeResult;
+        //   }
+        //   return this.resolveType(t, { inBlock: thisBlock });
+        // };
+
+        // if (isTypeParameter) {
+        //   return resolveInnerTypeRef(tsType) ?? this.errorType;
+        // } else {
+        //   // type.isTypeParameter() and the return confuses the type checker.
+        //   tsType = tsType as ts.Type;
+        // }
+
+        // this.resolvingSet.set(tsType);
+        // const typeArgs: BopFields = [];
+        try {
+          // Lookup cached generic instantiations.
+          // let typeParamsKey = '';
+          // if (requiresGenericLookup) {
+          //   const baseTypeArgs = (genericBase as ts.InterfaceType).typeParameters ?? [];
+          //   const thisTypeArgs = (tsType as ts.TypeReference).typeArguments ?? [];
+          //   if (!this.check(baseTypeArgs.length === thisTypeArgs.length, `Mismatching type arguments.`)) {
+          //     return this.errorType;
+          //   }
+          //   for (let i = 0; i < baseTypeArgs.length; ++i) {
+          //     const baseType = baseTypeArgs[i];
+          //     const thisType = thisTypeArgs[i];
+          //     const resolved = resolveInnerTypeRef(thisType) ?? this.errorType;
+          //     typeArgs.push({
+          //       identifier: baseType.symbol.name,
+          //       type: resolved,
+          //     });
+          //   }
+          //   typeParamsKey = this.toStructureKey(typeArgs);
+
+          //   const genericInstances = this.typeGenericMap.get(genericBase!);
+          //   if (genericInstances) {
+          //     found = genericInstances.get(typeParamsKey);
+          //   } else {
+          //     found = undefined;
+          //   }
+          //   if (found) {
+          //     return found;
+          //   }
+          // }
+
+          // Lookup internal types.
+          // const sourceFile = tsGetSourceFileOfNode(tsType.symbol?.declarations?.at(0));
+          // const isInternalDeclaration = sourceFile?.fileName?.toLowerCase()?.endsWith('.d.ts') ?? false;
+          // if (isInternalDeclaration) {
+          //   // console.log(`     internal type mapping ========> ${type.symbol.name}`);
+          //   const internalGenericType = this.internalGenericTypeMap.get(tsType.symbol.name);
+          //   if (internalGenericType) {
+          //     const instantiatedType = internalGenericType(typeArgs);
+          //     let genericInstances = this.typeGenericMap.get(genericBase!);
+          //     if (!genericInstances) {
+          //       genericInstances = new Map();
+          //       this.typeGenericMap.set(genericBase!, genericInstances);
+          //     }
+          //     genericInstances.set(typeParamsKey, instantiatedType);
+          //     return instantiatedType;
+          //   }
+          //   return this.internalTypes.get(tsType.symbol.name) ?? this.errorType;
+          // }
+
+          // Coalesce backing storage structs.
+          const fields: BapFields = [];
+          let constructorDecl: ts.ConstructorDeclaration|undefined;
+          let methodDecls: ts.MethodDeclaration[] = [];
+          for (const property of ((tsType as any).members as ts.SymbolTable) ?? tsType.symbol?.members ?? []) {
+            const propertyName = property[0].toString();
+            const propertySymbol = property[1];
+            const propertyDecl = propertySymbol.declarations?.at(0);
+            if (!this.verifyNotNulllike(propertyDecl, `Cannot determine type for property ${propertyName}.`)) {
+              // return this.errorType;
+              return;
+            }
+            if (ts.isTypeParameterDeclaration(propertyDecl)) {
+              continue;
+            }
+            if (ts.isMethodDeclaration(propertyDecl)) {
+              methodDecls.push(propertyDecl);
+              continue;
+            }
+            if (ts.isConstructorDeclaration(propertyDecl)) {
+              continue;
+            }
+            let propertySymbolType = this.tc.getTypeOfSymbol(propertySymbol);
+            let propertyType;
+            // if (propertySymbolType.isTypeParameter()) {
+            //   propertyType = resolveInnerTypeRef(propertySymbolType);
+            // }
+            // propertyType ??= this.type(propertySymbolType, { willCoerceTo: options?.willCoerceFieldsTo?.get(propertyName) });
+            propertyType ??= this.type(propertySymbolType);
+            // const propertyType = this.resolveType(this.tc.getTypeAtLocation(propertyDecl));
+            fields.push({ type: propertyType, identifier: propertyName });
+          }
+          // Sometimes the constructor disappears from everything but the symbol.
+          for (const property of tsType.symbol?.members ?? []) {
+            const propertyName = property[0].toString();
+            const propertySymbol = property[1];
+            const propertyDecl = propertySymbol.declarations?.at(0);
+            if (!this.verifyNotNulllike(propertyDecl, `Cannot determine type for property ${propertyName}.`)) {
+              return this.errorType;
+            }
+            if (ts.isConstructorDeclaration(propertyDecl)) {
+              constructorDecl = propertyDecl;
+              continue;
+            }
+          }
+
+          // let casesIdentifierMap: Map<BopType, { identifier: string, index: number }>|undefined;
+          // let caseVariableIdentifier: string|undefined;
+          // if (tsType.isUnion()) {
+          //   casesIdentifierMap = new Map();
+
+          //   const innerTypes = tsType.types.map(t => this.resolveType(t));
+          //   let innerIndex = 0;
+          //   for (const innerType of innerTypes) {
+          //     if (casesIdentifierMap.has(innerType)) {
+          //       continue;
+          //     }
+          //     const identifier = `${innerType.debugName}`;
+          //     fields.push({ type: innerType, identifier });
+          //     casesIdentifierMap.set(innerType, { identifier, index: innerIndex });
+          //     innerIndex++;
+          //   }
+
+          //   caseVariableIdentifier = 'case';
+          //   fields.push({ type: this.intType, identifier: caseVariableIdentifier });
+          // }
+
+          // const structureKey = this.toStructureKey(fields);
+
+          // let existingTypeInfo = this.typeCoalesceMap.get(structureKey);
+          // let fieldIdentifierMap: Map<string, { fieldVar: CodeVariable, fieldType: BopType }>;
+          let fieldIdentifierMap: Map<string, { fieldVar: CodeVariable, fieldType: BapTypeSpec }>;
+          let identifier: CodeVariable;
+          let innerCodeScope: CodeScope;
+          const methodFuncs: Array<() => void> = [];
+          // if (existingTypeInfo) {
+          //   identifier = existingTypeInfo.identifier;
+          //   innerScope = existingTypeInfo.innerScope;
+          //   fieldIdentifierMap = existingTypeInfo.fieldIdentifierMap;
+          // } else {
+          {
+            identifier = parentCodeScope.allocateVariableIdentifier(CodeTypeSpec.typeType, BopIdentifierPrefix.Struct, shortName);
+            innerCodeScope = parentCodeScope.createChildScope(CodeScopeType.Class);
+            fieldIdentifierMap = new Map();
+            // existingTypeInfo = { identifier, innerScope, fieldIdentifierMap };
+            // this.typeCoalesceMap.set(structureKey, existingTypeInfo);
+            for (const property of fields) {
+              const typeSpec = property.type.generate(context);
+              if (!this.verifyNotNulllike(typeSpec, `Field ${property.identifier} does not have a valid type.`)) {
+                continue;
+              }
+              const fieldIdentifier = innerCodeScope.allocateVariableIdentifier(typeSpec.codeTypeSpec, BopIdentifierPrefix.Field, property.identifier);
+              fieldIdentifierMap.set(property.identifier, { fieldVar: fieldIdentifier, fieldType: typeSpec });
+            }
+          }
+          {
+            const structWriterOuter = context.globalWriter.global.writeStruct(identifier.identifierToken);
+            // structWriterOuter.touchedByProxy = {
+            //   get touchedByCpu() { return structOf.touchedByCpu; },
+            //   get touchedByGpu() { return structOf.touchedByGpu; },
+            // };
+            const structWriter = structWriterOuter.body;
+
+            for (const [identifier, property] of fieldIdentifierMap) {
+              structWriter.writeField(property.fieldVar.identifierToken, property.fieldVar.typeSpec);
+            }
+            // structWriter.writeStaticConstant(this.writer.makeInternalToken('marshalBytesInto'), CodeTypeSpec.functionType, () => {
+            //   return structOf.marshalFunc;
+            // });
+            // structWriter.writeStaticConstant(this.writer.makeInternalToken('marshalByteStride'), CodeTypeSpec.functionType, () => {
+            //   if (structOf.marshalLength === undefined) {
+            //     return;
+            //   }
+            //   const value = structOf.marshalLength;
+            //   return (expr: CodeExpressionWriter) => {
+            //     expr.writeLiteralInt(value);
+            //   };
+            // });
+
+            // for (const methodDecl of methodDecls) {
+            //   methodFuncs.push(() => {
+            //     const methodVar = this.declareFunction(methodDecl, newType, this.globalBlock, thisBlock, typeArgs);
+            //     if (!methodVar) {
+            //       return;
+            //     }
+            //   });
+            // }
+          }
+
+          // let unionOf: BopTypeUnion|undefined;
+          // if (casesIdentifierMap && caseVariableIdentifier) {
+          //   unionOf = new BopTypeUnion(
+          //     new Map(Array.from(casesIdentifierMap.entries()).map(([type, entry]) => [ type, { caseVar: fieldIdentifierMap.get(entry.identifier)!.fieldVar, caseIndex: entry.index } ])),
+          //     fieldIdentifierMap.get(caseVariableIdentifier)!.fieldVar,
+          //   );
+          // }
+
+          // const innerBlock = parentBlock.createChildBlock(CodeScopeType.Class);
+          // const typeVar = parentBlock.mapStorageIdentifier(shortName, this.typeType);
+
+          const prototypeScope = new BapPrototypeScope();// context.rootContext.withChildScope();
+          // const fieldMap = new Map<string, BopVariable>();
+          for (const property of fields) {
+            const fieldIdentifier = fieldIdentifierMap.get(property.identifier)!;
+
+            const generateWrite = (context: BapGenerateContext, value: BapSubtreeValue): BapWriteAsStatementFunc => {
+              const thisValue = context.scope.resolve(BapThisSymbol);
+              return (prepare) => {
+                const thisWriter = thisValue?.writeIntoExpression?.(prepare);
+                const valueWriter = value.writeIntoExpression?.(prepare);
+                const assignStmt = prepare.writeAssignmentStatement();
+                thisWriter?.(assignStmt.ref.writePropertyAccess(fieldIdentifier.fieldVar.identifierToken).source);
+                valueWriter?.(assignStmt.value);
+              };
+            };
+
+            prototypeScope.declare(property.identifier, fieldIdentifier.fieldVar.identifierToken, {
+              generateRead: (context: BapGenerateContext): BapSubtreeValue => {
+                const thisValue = context.scope.resolve(BapThisSymbol);
+                return {
+                  type: 'cached',
+                  typeSpec: property.type.generate(context),
+                  writeIntoExpression: (prepare) => {
+                    const thisWriter = thisValue?.writeIntoExpression?.(prepare);
+                    return (expr) => {
+                      const propAccessExpr = expr.writePropertyAccess(fieldIdentifier.fieldVar.identifierToken);
+                      thisWriter?.(propAccessExpr.source);
+                    };
+                  },
+                  generateWrite: (value): BapWriteAsStatementFunc => generateWrite(context, value),
+                };
+              },
+              generateWrite: generateWrite,
+            });
+            // const fieldVar = innerBlock.mapIdentifier(property.identifier, fieldIdentifier.fieldVar.typeSpec, fieldIdentifier.fieldType);
+            // fieldVar.result = fieldIdentifier.fieldVar;
+            // fieldMap.set(property.identifier, fieldVar);
+          }
+
+          // const structOf = new BopStructType(
+          //   fields.map(f => fieldMap.get(f.identifier)!),
+          // );
+          // structOf.touchedByCpu = true;
+          // structOf.touchedByGpu = true;
+
+          // const newType = BopType.createPassByValue({
+          //     debugName: shortName,
+          //     valueType: CodeTypeSpec.fromStruct(identifier.identifierToken),
+          //     innerScope,
+          //     innerBlock,
+          //     structOf,
+          // });
+          // if (requiresGenericLookup) {
+          //   let genericInstances = this.typeGenericMap.get(genericBase!);
+          //   if (!genericInstances) {
+          //     genericInstances = new Map();
+          //     this.typeGenericMap.set(genericBase!, genericInstances);
+          //   }
+          //   genericInstances.set(typeParamsKey, newType);
+          // } else {
+          //   this.typeMap.set(tsType, newType);
+          // }
+          // typeVar.typeResult = newType;
+
+
+          // if (!constructorDecl && existingTypeInfo.defaultConstructor) {
+          //   // Use the existing default constructor.
+          //   const constructorIdentifier = existingTypeInfo.defaultConstructor;
+          //   innerBlock.mapIdentifier('constructor', constructorIdentifier.fieldVar.typeSpec, constructorIdentifier.fieldType).result = constructorIdentifier.fieldVar;
+          // } else {
+          //   if (!constructorDecl) {
+          //     // Generate a default constructor.
+          //     const constructorIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Constructor, shortName);
+          //     const constructorFuncType = BopType.createFunctionType({
+          //       debugName: `${shortName}.constructor`,
+          //       innerScope: innerScope.createChildScope(CodeScopeType.Local),
+          //       innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
+          //       functionOf: new BopFunctionOf([new BopFunctionType(
+          //         [],
+          //         newType,
+          //         /* isMethod */ false,
+          //         0,
+          //       )]),
+          //     });
+          //     existingTypeInfo.defaultConstructor = { fieldVar: constructorIdentifier, fieldType: constructorFuncType };
+
+          //     innerBlock.mapIdentifier('constructor', constructorIdentifier.typeSpec, constructorFuncType).result = constructorIdentifier;
+          //     const constructorWriter = this.writer.global.writeFunction(constructorIdentifier.identifierToken);
+          //     constructorWriter.returnTypeSpec = newType.storageType;
+
+          //     const constructorBlock = this.globalBlock.createChildBlock(CodeScopeType.Function);
+          //     const constructorScope = this.writer.global.scope.createChildScope(CodeScopeType.Function);
+          //     const constructorOutVar = constructorScope.allocateVariableIdentifier(newType.storageType, BopIdentifierPrefix.Local, 'New');
+          //     constructorWriter.body.writeVariableDeclaration(constructorOutVar);
+          //     constructorWriter.body.writeReturnStatement().expr.writeVariableReference(constructorOutVar);
+          //   } else {
+          //     // Roll out the constructor implementation.
+          //     this.declareFunction(constructorDecl, newType, this.globalBlock, thisBlock, typeArgs);
+          //   }
+          // }
+          // methodFuncs.forEach(f => f());
+
+          const newType: BapTypeSpec = {
+            prototypeScope: prototypeScope,
+            codeTypeSpec: CodeTypeSpec.fromStruct(identifier.identifierToken),
+          };
+          return newType;
+        } finally {
+          // this.resolvingSet.delete(tsType);
+        }
+        return this.errorType;
+      },
+    };
+  }
+
+  private get errorType(): BapTypeSpec {
+    throw new Error('???');
+  }
+
+
+
+  private getSymbolType(s: ts.Symbol|undefined) {
+    if (s?.valueDeclaration) {
+      return this.stringifyType(this.tc.getTypeAtLocation(s.valueDeclaration));
+    }
+    return '???';
+  }
+
+  private stringifyType(type: ts.Type): string {
+      // console.log(this.tc.typeToString(type));
+      // console.log(this.tc.typeToString(this.tc.getWidenedType(type)));
+      // console.log((this.tc as any).getElementTypeOfArrayType(type));
+    const isObject = (type.flags & ts.TypeFlags.Object) === ts.TypeFlags.Object && type.symbol;
+    const objectFlags = isObject ? (type as ts.ObjectType).objectFlags : ts.ObjectFlags.None;
+    const isReference = objectFlags & ts.ObjectFlags.Reference;
+    const intrinsicType = (type as any)?.intrinsicName;
+    const isError = intrinsicType === 'error';
+    if (isError) {
+      return '';
+    } else if (intrinsicType) {
+      return intrinsicType;
+    } else if ((type.flags & ts.TypeFlags.Any) === ts.TypeFlags.Any) {
+      return 'any';
+    } else if (type.isUnion()) {
+      return type.types.map(t => this.stringifyType(t)).join('|');
+    } else if (type.isIntersection()) {
+      return type.types.map(t => this.stringifyType(t)).join('&');
+    } else if (type.isLiteral()) {
+      return type.value.toString();
+    } else if (type.isClassOrInterface()) {
+      return type.symbol.name;
+    } else if (isReference) {
+      return `${type.symbol.name}<${(type as ts.TypeReference).typeArguments?.map(a => this.stringifyType(a)).join(',')}>`;
+    } else if (isObject && this.tc.isArrayType(type)) {
+      let elementType = isReference ? (type as ts.TypeReference).typeArguments?.at(0) : undefined;
+      elementType ??= this.tc.getAnyType();
+      return `${this.stringifyType(elementType)}[]`;
+    } else if (isObject) {
+      if ((type.symbol.flags & ts.SymbolFlags.Function) === ts.SymbolFlags.Function) {
+        const signature = this.tc.getSignaturesOfType(type, ts.SignatureKind.Call).at(0);
+        if (signature) {
+          const returnType = signature.getReturnType();
+          return `(${signature.getParameters().map(p => `${p.name}:${this.getSymbolType(p)}`).join(',')}) => ${this.stringifyType(returnType)}`;
+        }
+      }
+      return `{${type.getProperties().map(p => `${p.name}:${this.getSymbolType(p)}`).join(',')}}`;
+    }
+    return type.symbol?.name ?? ((type as any)?.intrinsicName) ?? '';
+  }
+
+
+
+
+
+
+
+
+  // private toStructureKey(fields: BopFields) {
+  //   let structureKey = '';
+  //   for (const entry of fields) {
+  //     const lookupType = entry.type.tempType;
+  //     let typeKey = lookupType.asPrimitive ?? lookupType.asStruct!;
+  //     let typeId = this.typeIdMap.get(typeKey);
+  //     if (typeId === undefined) {
+  //       typeId = this.typeIdMap.size;
+  //       this.typeIdMap.set(typeKey, typeId);
+  //     }
+  //     let structureKeyPart = `${entry.identifier}:${typeId},`;
+  //     if (lookupType.isConst) {
+  //       structureKeyPart = `const ${structureKeyPart}`;
+  //     }
+  //     if (lookupType.isReference) {
+  //       structureKeyPart += '&';
+  //     }
+  //     if (lookupType.isPointer) {
+  //       structureKeyPart += '*';
+  //     }
+  //     if (lookupType.isArray) {
+  //       structureKeyPart += '[]';
+  //     }
+  //     structureKey += structureKeyPart;
+  //   }
+  //   return structureKey;
+  // }
+
+  protected verify<T>(value: T, errorFormatter: (() => string)|string, predicate?: (v: T) => boolean): T {
     const cond = predicate === undefined ? (!!value) : predicate(value);
     if (!cond) {
       let error: string;
@@ -507,11 +608,11 @@ export class BapVisitor {
     return value;
   }
 
-  logAssert(error: string) {
+  protected logAssert(error: string) {
     console.error(error);
   }
 
-  check(cond: boolean, errorFormatter: (() => string)|string): boolean {
+  protected check(cond: boolean, errorFormatter: (() => string)|string): boolean {
     if (!cond) {
       let error: string;
       if (typeof(errorFormatter) === 'string') {
@@ -524,7 +625,7 @@ export class BapVisitor {
     return cond;
   }
 
-  verifyNotNulllike<T>(cond: T|null|undefined, errorFormatter: (() => string)|string): cond is T {
+  protected verifyNotNulllike<T>(cond: T|null|undefined, errorFormatter: (() => string)|string): cond is T {
     if (cond === null || cond === undefined) {
       let error: string;
       if (typeof(errorFormatter) === 'string') {
@@ -537,17 +638,65 @@ export class BapVisitor {
     }
     return true;
   }
-}
 
-function tsIsTrueLiteral(node: ts.Node): node is ts.TrueLiteral {
-  return node.kind === ts.SyntaxKind.TrueKeyword;
-}
+  protected writeFuncToExpr(func: BapWriteAsStatementFunc|undefined): BapWriteIntoExpressionFunc|undefined {
+    if (!func) {
+      return;
+    }
+    return (prepare) => {
+      func(prepare);
+      return undefined;
+    };
+  }
 
-function tsIsFalseLiteral(node: ts.Node): node is ts.FalseLiteral {
-  return node.kind === ts.SyntaxKind.FalseKeyword;
-}
+  protected bindGenContext(gen: BapSubtreeGenerator|undefined, context: BapGenerateContext) {
+    if (!gen) {
+      return;
+    }
+    return {
+      generateRead: (_: BapGenerateContext): BapSubtreeValue => {
+        return gen.generateRead(context);
+      },
+    };
+  }
 
-function tsIsThisExpression(node: ts.Node): node is ts.ThisExpression {
-  return node.kind === ts.SyntaxKind.ThisKeyword;
-}
+  public static mapNodeType<
+      TKind extends ts.SyntaxKind,
+      TNode extends AnyPossibleNode<TKind>,
+  >(
+      nodeKind: TKind,
+      activator: BapVisitorImplConstructor<TNode>,
+      predicate?: (node: TNode) => boolean,
+  ) {
+    const visitImpl = (node: ts.Node) => new activator().impl(node as TNode);
+    this.mapNodeTypeVisitor(nodeKind, visitImpl, predicate as any);
+  }
 
+  public static mapNodeTypeFunc<
+      TKind extends ts.SyntaxKind,
+      TNode extends AnyPossibleNode<TKind>,
+  >(
+      nodeKind: TKind,
+      activator: () => BapVisitorImpl<TNode>,
+      predicate?: (node: TNode) => boolean,
+  ) {
+    const visitImpl = (node: ts.Node) => activator().impl(node as TNode);
+    this.mapNodeTypeVisitor(nodeKind, visitImpl, predicate as any);
+  }
+
+  private static mapNodeTypeVisitor(
+      nodeKind: ts.SyntaxKind,
+      visitImpl: (node: ts.Node) => BapSubtreeGenerator|undefined,
+      predicate?: (node: ts.Node) => boolean,
+  ) {
+    let visitors = this.nodeTypeMap.get(nodeKind);
+    if (!visitors) {
+      visitors = [];
+      this.nodeTypeMap.set(nodeKind, visitors);
+    }
+    visitors.push({
+      predicate: predicate,
+      visit: visitImpl,
+    });
+  }
+}

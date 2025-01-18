@@ -132,12 +132,64 @@ function drawTriangle() {
 }
 `;
 
-const initialCode = `
+const initialCode3 = `
+function test() {
+  for (let i = 0; i < 5; i = i + 1) {
+    for (let j = 0; j < 5; j = j + 1) {
+      if (j > 1234) {
+        return 3;
+      }
+    }
+  }
+}
+`;
+
+const initialCode4 = `
 function test2() {
   return 1 + 2;
 }
 function test() {
-  test2() + 3;
+  let a = 3;
+  if (test2() + 4) {
+    let b = 8;
+    let c = a + 5 + b;
+    if (true) {
+      a = c;
+    }
+  }
+
+  for (let i = 0; i < 5; i = i + 1) {
+    a = i + a;
+    if (i > 10) {
+      break;
+    }
+    if (i < 5) {
+      continue;
+    }
+    a = a + 1;
+  }
+
+  if (a + 6) {
+    return 7 + a;
+  }
+}
+`;
+
+const initialCode = `
+interface A {
+  fieldA: number;
+  fieldB: B;
+}
+interface B {
+  fieldA: number;
+}
+
+function test() {
+  const a: A = { fieldA: 1, fieldB: { fieldA: 2 } };
+  a.fieldA = 1234;
+  a.fieldB.fieldA = 1234;
+  a.fieldB = { fieldA: 5432 };
+  return 8 + 2 + a.fieldA;
 }
 `;
 

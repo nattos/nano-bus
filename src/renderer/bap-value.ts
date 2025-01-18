@@ -1,60 +1,34 @@
-import { CodeStatementWriter, CodeExpressionWriter } from "./code-writer";
+import { BapChildScopeOptions, BapPrototypeScope, BapScope, BapThisSymbol } from "./bap-scope";
+import { CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator, CodeWriter, CodeTypeSpec } from "./code-writer";
 
 export interface BapSubtreeGenerator {
   generateRead(context: BapGenerateContext): BapSubtreeValue;
-  generateWrite?(context: BapGenerateContext): void;
+  generateWrite?(context: BapGenerateContext, value: BapSubtreeValue): BapWriteAsStatementFunc|undefined;
 }
 
 export class BapGenerateContext {
+  rootContext: BapGenerateContext;
   constructor(
+    parent: BapGenerateContext|undefined,
     readonly cache: BapGenerateCache,
     readonly platform: BapGeneratePlatformContext,
     readonly scope: BapScope,
-  ) {}
-
-  withChildScope() {
-    return new BapGenerateContext(this.cache, this.platform, this.scope.child());
+    readonly globalWriter: CodeWriter,
+  ) {
+    this.rootContext = parent?.rootContext ?? this;
   }
 
-  static root() {
-    return new BapGenerateContext(new BapGenerateCache(), { isGpu: false, platform: '' }, new BapScope());
-  }
-}
-
-type BapIdentifier = string|BapSpecialSymbol;
-type BapSpecialSymbol = typeof BapThisSymbol|typeof BapReturnValueSymbol;
-export class BapThisSymbol {};
-export class BapReturnValueSymbol {};
-
-export class BapScope {
-  private readonly map = new Map<BapIdentifier, BapSubtreeValue>();
-  private readonly children: BapScope[] = [];
-
-  constructor(
-    readonly parent?: BapScope,
-  ) {}
-
-  declare(identifier: BapIdentifier, value: BapSubtreeValue) {
-    this.map.set(identifier, value);
-  }
-
-  assign(identifier: BapIdentifier, value: BapSubtreeValue) {
-    if (this.map.has(identifier)) {
-      // TODO: Add in conditional!!!
-      this.map.set(identifier, value);
-    } else {
-      this.parent?.assign(identifier, value);
+  withChildScope(init?: BapChildScopeOptions) {
+    const child = new BapGenerateContext(this, this.cache, this.platform, this.scope.child(init), this.globalWriter);
+    if (init?.bindScope?.thisValue) {
+      child.scope.bindContext = child;
+      child.scope.declare(BapThisSymbol, init.bindScope.thisValue);
     }
+    return child;
   }
 
-  resolve(identifier: BapIdentifier): BapSubtreeValue|undefined {
-    return this.map.get(identifier) ?? this.parent?.resolve(identifier);
-  }
-
-  child(): BapScope {
-    const childScope = new BapScope(this);
-    this.children.push(childScope);
-    return childScope;
+  static root(globalWriter: CodeWriter) {
+    return new BapGenerateContext(undefined, new BapGenerateCache(), { isGpu: false, platform: '' }, new BapScope(), globalWriter);
   }
 }
 
@@ -73,6 +47,8 @@ export class BapGenerateCache {
 // }
 
 export type BapSubtreeValue = BapLiteral|BapTypeLiteral|BapFunctionLiteral|BapCachedValue|BapEvalValue|BapStatementValue|BapUninitializedValue|BapErrorValue;
+export type BapWriteIntoExpressionFunc = (prepare: CodeStatementWriter) => ((result: CodeExpressionWriter) => void)|undefined;
+export type BapWriteAsStatementFunc = (prepare: CodeStatementWriter) => void;
 
 export interface BapLiteral extends BapSubtreeValueBase {
   type: 'literal';
@@ -90,6 +66,7 @@ export interface BapFunctionLiteral extends BapSubtreeValueBase {
 
 export interface BapCachedValue extends BapSubtreeValueBase {
   type: 'cached';
+  generateWrite?(value: BapSubtreeValue): BapWriteAsStatementFunc|undefined;
 }
 
 export interface BapEvalValue extends BapSubtreeValueBase {
@@ -111,6 +88,19 @@ export interface BapUninitializedValue extends BapSubtreeValueBase {
 export interface BapSubtreeValueBase {
   noCopy?: boolean;
   noPassAsArg?: boolean;
-  writeIntoExpression?(prepare: CodeStatementWriter): ((result: CodeExpressionWriter) => void)|undefined;
+  typeSpec?: BapTypeSpec;
+  writeIntoExpression?: BapWriteIntoExpressionFunc;
 }
+
+
+export interface BapTypeGenerator {
+  generate(context: BapGenerateContext): BapTypeSpec|undefined;
+}
+
+export interface BapTypeSpec {
+  prototypeScope: BapPrototypeScope;
+  codeTypeSpec: CodeTypeSpec;
+}
+
+export type BapFields = Array<{ type: BapTypeGenerator; identifier: string; }>;
 
