@@ -7,6 +7,8 @@ import { BopBlock, BopStage, BopResult, BopIdentifierPrefix, BopGenericFunction,
 import { loadBopLib, toStringResolvedType } from './bop-lib-loader';
 import { bopRewriteShaderFunction, bopShaderBinding, FuncMutatorFunc, GpuBindings } from './bop-shader-binding';
 import { writeSourceNodeCode } from './bap-processor';
+import { BapVisitorRootContext } from './bap-visitor';
+import { BapTypes } from './bap-types';
 
 
 
@@ -514,7 +516,15 @@ const instanceVars = {};
     }
 
     if (ts.isSourceFile(node)) {
-      writeSourceNodeCode(node, this, this.blockWriter, this.writer);
+      let types: BapTypes;
+      const rootContext: BapVisitorRootContext = {
+        program: this.program,
+        sourceRoot: this.sourceRoot,
+        tc: this.tc,
+        get types() { return types; },
+      };
+      types = new BapTypes(rootContext);
+      writeSourceNodeCode(node, rootContext, this.blockWriter, this.writer);
       if (true as any) {
         return;
       }

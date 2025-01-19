@@ -31,16 +31,18 @@ export class BapReturnStatementVisitor extends BapVisitor {
           writers.push(controlFlowScope.preBreakBreak?.generateRead(context));
           writers.push(controlFlowScope.preFinally?.generateRead(context));
         }
-        let returnAssignWriter = returnAssignGen?.generateRead(context);
+        const returnAssignValue = returnAssignGen?.generateRead(context);
         return {
           type: 'statement',
           writeIntoExpression: (prepare) => {
-            returnAssignWriter?.writeIntoExpression?.(prepare)?.(prepare.writeExpressionStatement().expr);
+            const returnAssignWriter = returnAssignValue?.writeIntoExpression?.(prepare);
             for (const writer of writers) {
               writer?.writeIntoExpression?.(prepare);
             }
-            prepare.writeBreakStatement();
-            return undefined;
+            return (expr) => {
+              returnAssignWriter?.(expr);
+              prepare.writeBreakStatement();
+            };
           },
         };
       },

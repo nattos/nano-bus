@@ -1,5 +1,7 @@
 import { PathsDirectoryHandle, PathsFileHandle } from "./renderer/paths";
 
+export type EnumKeyRecord<TEnum, TValue> = Record<Extract<TEnum, string>, TValue>;
+
 export class Resolvable<T extends any|void> {
   private resolveFunc = (value: T) => {}
   private rejectFunc = (reason?: any) => {}

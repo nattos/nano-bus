@@ -33,7 +33,7 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
     const returnVarGen = returnVarVisitor.manual({ newVars: [
       {
         identifier: BapReturnValueSymbol,
-        type: this.type(returnType),
+        type: this.types.type(returnType),
       }
     ] });
 
@@ -42,11 +42,12 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
         const body = this.child(funcBody);
         const funcLiteral: BapFunctionLiteral = {
           type: 'function',
-          typeSpec: BapVisitor.primitiveTypeSpec(CodePrimitiveType.Function),
+          typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
           resolve: (args: BapSubtreeValue[], typeArgs: BapTypeLiteral[]) => {
             // TODO: Perform overload resolution and generic template expansion.
             // TODO: Insert args into context.
             const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function } });
+            childContext.scope.declare('a', args[0]);
 
             const returnVarWriter = returnVarGen?.generateRead(childContext);
             const callWriter = body?.generateRead(childContext);

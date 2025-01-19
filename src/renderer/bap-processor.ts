@@ -64,7 +64,7 @@ export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitor
   BapVisitor.mapNodeType(ts.SyntaxKind.BreakStatement, BapBreakStatementVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.ContinueStatement, BapContinueStatementVisitor);
 
-  const context = BapGenerateContext.root(codeWriter);
+  const context = BapGenerateContext.root(rootContext, codeWriter);
   const resultWriter = new BapGlobalBlockVisitor(rootContext).visitSourceFile(node)?.generateRead(context)?.writeIntoExpression?.(blockWriter);
   const logCallExpr = blockWriter.writeExpressionStatement().expr.writeMethodCall(codeWriter.makeInternalToken('log'));
   logCallExpr.source.writeIdentifier(codeWriter.makeInternalToken('console'));

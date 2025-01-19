@@ -36,7 +36,7 @@ export class BapIfStatementVisitor extends BapVisitor {
         const condValue = cond?.generateRead(context) ?? { type: 'error' };
         const condVar: BapSubtreeValue = {
           type: 'cached',
-          typeSpec: BapVisitor.primitiveTypeSpec(CodePrimitiveType.Bool),
+          typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Bool),
           writeIntoExpression: (prepare) => {
             const condCodeVar = prepare.scope.allocateVariableIdentifier(CodeTypeSpec.boolType, BopIdentifierPrefix.Local, 'cond');
             const condCodeVarStmt = prepare.writeVariableDeclaration(condCodeVar);

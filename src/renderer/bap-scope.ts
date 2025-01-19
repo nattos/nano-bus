@@ -1,5 +1,5 @@
 import { BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue } from "./bap-value";
-import { BapVisitor } from "./bap-visitor";
+import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
 import { CodeStatementWriter, CodeBinaryOperator, CodeNamedToken, CodePrimitiveType } from "./code-writer";
 
 export type BapIdentifier = string|BapSpecialSymbol;
@@ -69,6 +69,7 @@ export class BapScope {
   bindContext?: BapGenerateContext;
 
   constructor(
+    readonly rootContext: BapVisitorRootContext,
     readonly parent?: BapScope,
     readonly cond?: BapSubtreeValue,
     readonly controlFlowScope?: BapControlFlowScope,
@@ -115,7 +116,7 @@ export class BapScope {
       if (condVars.length > 0) {
         condValue = {
           type: 'eval',
-          typeSpec: BapVisitor.primitiveTypeSpec(CodePrimitiveType.Bool),
+          typeSpec: this.rootContext.types.primitiveTypeSpec(CodePrimitiveType.Bool),
           writeIntoExpression(prepare: CodeStatementWriter) {
             const condVarsWriters = condVars.map(condVar => condVar.writeIntoExpression?.(prepare));
             const thenValueWriter = value.writeIntoExpression?.(prepare);
@@ -190,6 +191,7 @@ export class BapScope {
 
   child(init?: BapChildScopeOptions): BapScope {
     const childScope = new BapScope(
+      this.rootContext,
       this,
       init?.cond,
       init?.controlFlowScope,

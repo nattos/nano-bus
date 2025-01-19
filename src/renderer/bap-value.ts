@@ -1,4 +1,5 @@
 import { BapChildScopeOptions, BapPrototypeScope, BapScope, BapThisSymbol } from "./bap-scope";
+import { BapVisitorRootContext } from "./bap-visitor";
 import { CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator, CodeWriter, CodeTypeSpec } from "./code-writer";
 
 export interface BapSubtreeGenerator {
@@ -27,8 +28,8 @@ export class BapGenerateContext {
     return child;
   }
 
-  static root(globalWriter: CodeWriter) {
-    return new BapGenerateContext(undefined, new BapGenerateCache(), { isGpu: false, platform: '' }, new BapScope(), globalWriter);
+  static root(context: BapVisitorRootContext, globalWriter: CodeWriter) {
+    return new BapGenerateContext(undefined, new BapGenerateCache(), { isGpu: false, platform: '' }, new BapScope(context), globalWriter);
   }
 }
 
@@ -48,7 +49,7 @@ export class BapGenerateCache {
 
 export type BapSubtreeValue = BapLiteral|BapTypeLiteral|BapFunctionLiteral|BapCachedValue|BapEvalValue|BapStatementValue|BapUninitializedValue|BapErrorValue;
 export type BapWriteIntoExpressionFunc = (prepare: CodeStatementWriter) => ((result: CodeExpressionWriter) => void)|undefined;
-export type BapWriteAsStatementFunc = (prepare: CodeStatementWriter) => void;
+export type BapWriteAsStatementFunc = (prepare: CodeStatementWriter) => ((block: CodeStatementWriter) => void)|undefined;
 
 export interface BapLiteral extends BapSubtreeValueBase {
   type: 'literal';
@@ -61,7 +62,7 @@ export interface BapTypeLiteral extends BapSubtreeValueBase {
 
 export interface BapFunctionLiteral extends BapSubtreeValueBase {
   type: 'function';
-  resolve(args: BapSubtreeValue[], typeArgs: BapTypeLiteral[]): BapSubtreeValue;
+  resolve(args: Array<BapSubtreeValue|undefined>, typeArgs: BapTypeLiteral[]): BapSubtreeValue;
 }
 
 export interface BapCachedValue extends BapSubtreeValueBase {
@@ -102,5 +103,5 @@ export interface BapTypeSpec {
   codeTypeSpec: CodeTypeSpec;
 }
 
-export type BapFields = Array<{ type: BapTypeGenerator; identifier: string; }>;
+export type BapFields = Array<{ type: BapTypeSpec; identifier: string; }>;
 

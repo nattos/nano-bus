@@ -20,7 +20,7 @@ export class BapObjectLiteralExpressionVisitor extends BapVisitor {
       }
     }
 
-    const asTypeGen = this.type(node);
+    const asTypeGen = this.types.type(node);
     // const storage = createStorage(asType);
 
     return {

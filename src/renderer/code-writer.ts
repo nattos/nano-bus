@@ -1,5 +1,7 @@
 import * as utils from '../utils';
 
+const TRACE = true;
+
 export enum CodeWriterPlatform {
   Metal = 'metal',
   WebGPU = 'web',
@@ -902,11 +904,14 @@ export class CodeStatementWriter implements CodeWriterFragment {
     });
     return result;
   }
-  writeExpressionStatement(): { expr: CodeExpressionWriter } {
+  writeExpressionStatement(): { expr: CodeExpressionWriter; } {
     const result = {
-      expr: new CodeExpressionWriter(),
+      expr: new CodeExpressionWriter({ isDiscardable: true }),
     };
     this.pushWriterFunc((stream, context) => {
+      if (result.expr.isDiscarded) {
+        return;
+      }
       result.expr.writerFunc(stream, context);
       this.writeFinalizeLine(stream, context);
     });
@@ -1077,17 +1082,32 @@ export class CodeExpressionWriterBase implements CodeWriterFragment {
   private writerFuncField?: CodeWriterFunc;
 
   get isDefined() { return this.writerFuncField !== undefined; }
+  get isDiscarded() { return this._discarded; }
+  get isDiscardable() { return this.init?.isDiscardable ?? false; }
+  private _discarded = false;
+  private readonly trace;
+
+  constructor(private readonly init?: { isDiscardable?: boolean }) {
+    this.trace = getTrace();
+  }
+
+  discard() {
+    if (!this.isDiscardable) {
+      throw new Error(`Expression is not discardable.${this.trace}`);
+    }
+    this._discarded = true;
+  }
 
   get writerFunc(): CodeWriterFunc {
     if (!this.writerFuncField) {
-      throw new Error('Expression is not yet defined.');
+      throw new Error(`Expression is not yet defined.${this.trace}`);
     }
     return this.writerFuncField;
   }
 
   protected setWriter(func: CodeWriterFunc) {
     if (this.writerFuncField) {
-      throw new Error('Expression is already defined.');
+      throw new Error(`Expression is already defined.${this.trace}`);
     }
     this.writerFuncField = func;
   }
@@ -1737,4 +1757,12 @@ export class CodeTextStream {
   getOuterCode() {
     return this.lines.join('\n');
   }
+}
+
+function getTrace(): string {
+  if (!TRACE) {
+    return '';
+  }
+  const stacktrace = new Error().stack ?? '';
+  return stacktrace.replace(/^Error\n.*\n/g, '\n');
 }

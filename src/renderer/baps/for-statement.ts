@@ -21,7 +21,7 @@ export class BapForStatementVisitor extends BapVisitor {
       newVars: [
         {
           identifier: BapBreakBreakFlagSymbol,
-          type: this.primitiveType(CodePrimitiveType.Bool),
+          type: this.types.primitiveType(CodePrimitiveType.Bool),
           initializer: new BapBooleanLiteralVisitor().manual({ value: false }),
         },
       ],

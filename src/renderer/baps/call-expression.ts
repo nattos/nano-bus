@@ -1,18 +1,20 @@
-import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
-import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator } from "../code-writer";
-import { getNodeLabel } from "../ts-helpers";
+import { BapVisitor } from "../bap-visitor";
 import { BapSubtreeGenerator, BapGenerateContext } from '../bap-value';
+import { BapNumericLiteralVisitor } from './numeric-literal';
 
 export class BapCallExpressionVisitor extends BapVisitor {
   impl(node: ts.CallExpression): BapSubtreeGenerator|undefined {
     const func = this.child(node.expression);
+
+    const argGens = node.arguments.map(arg => this.child(arg));
+
     return {
       generateRead: (context: BapGenerateContext) => {
         let funcValue = func?.generateRead(context);
         if (funcValue?.type === 'function') {
-          funcValue = funcValue.resolve([], []);
+          const argValues = argGens.map(gen => gen?.generateRead(context));
+          funcValue = funcValue.resolve(argValues, []);
         }
         return {
           // TODO: CACHE THIS!

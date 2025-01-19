@@ -53,7 +53,7 @@ export class BapBinaryExpressionVisitor extends BapVisitor {
         return {
           // TODO: CACHE THIS!
           type: 'cached',
-          typeSpec: BapVisitor.primitiveTypeSpec(CodePrimitiveType.Int),
+          typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Int),
           writeIntoExpression: (prepare) => {
             const lhsWriter = lhsValue.writeIntoExpression?.(prepare);
             const rhsWriter = rhsValue.writeIntoExpression?.(prepare);

@@ -175,7 +175,7 @@ function test() {
 }
 `;
 
-const initialCode = `
+const initialCode5 = `
 interface A {
   fieldA: number;
   fieldB: B;
@@ -190,6 +190,28 @@ function test() {
   a.fieldB.fieldA = 1234;
   a.fieldB = { fieldA: 5432 };
   return 8 + 2 + a.fieldA;
+}
+`;
+
+const initialCode = `
+interface A<T> {
+  fieldA: T;
+  fieldB: B<T>;
+}
+interface B<T> {
+  fieldA: T;
+}
+
+function test2(a: number): number {
+  return a + 1;
+}
+
+function test() {
+  const a: A<number> = { fieldA: 1, fieldB: { fieldA: 2 } };
+  a.fieldA = 1234;
+  a.fieldB.fieldA = 1234;
+  a.fieldB = { fieldA: 5432 };
+  return 8 + 2 + a.fieldA + test2(8766);
 }
 `;
 

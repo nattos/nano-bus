@@ -9,7 +9,7 @@ export class BapBooleanLiteralVisitor extends BapVisitor {
       generateRead: () => {
         return {
           type: 'literal',
-          typeSpec: BapVisitor.primitiveTypeSpec(CodePrimitiveType.Bool),
+          typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Bool),
           writeIntoExpression: () => {
             return expr => {
               expr.writeLiteralBool(value);

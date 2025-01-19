@@ -1,27 +1,23 @@
 import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
-import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator, CodePrimitiveType } from "../code-writer";
-import { getNodeLabel } from "../ts-helpers";
+import { BapVisitor } from "../bap-visitor";
+import { CodePrimitiveType } from "../code-writer";
 import { BapSubtreeGenerator } from '../bap-value';
 
 export class BapNumericLiteralVisitor extends BapVisitor {
-  impl(node: ts.NumericLiteral): BapSubtreeGenerator|undefined {
-    const parsedInt = utils.parseIntOr(node.text);
-    const parsedFloat = utils.parseFloatOr(node.text);
-    // TODO: Bad!!!
-    const asInt = !node.getText(this.sourceRoot).includes('.') && parsedInt === parsedFloat;
+  manual({ intValue, floatValue }: { intValue?: number; floatValue?: number; }): BapSubtreeGenerator|undefined {
+    const asInt = intValue !== undefined;
     return {
       generateRead: () => {
         return {
           type: 'literal',
-          typeSpec: BapVisitor.primitiveTypeSpec(asInt ? CodePrimitiveType.Int : CodePrimitiveType.Bool),
+          typeSpec: this.types.primitiveTypeSpec(asInt ? CodePrimitiveType.Int : CodePrimitiveType.Bool),
           writeIntoExpression: () => {
             return expr => {
               if (asInt) {
-                expr.writeLiteralInt(parsedInt ?? Number.NaN);
+                expr.writeLiteralInt(intValue ?? Number.NaN);
               } else {
-                expr.writeLiteralFloat(parsedFloat ?? Number.NaN);
+                expr.writeLiteralFloat(floatValue ?? Number.NaN);
               }
             };
           },
@@ -44,5 +40,12 @@ export class BapNumericLiteralVisitor extends BapVisitor {
     //     return { numberType: asInt ? BopInferredNumberType.Int : BopInferredNumberType.Float };
     //   },
     // };
+  }
+  impl(node: ts.NumericLiteral): BapSubtreeGenerator|undefined {
+    const parsedInt = utils.parseIntOr(node.text);
+    const parsedFloat = utils.parseFloatOr(node.text);
+    // TODO: Bad!!!
+    const asInt = !node.getText(this.sourceRoot).includes('.') && parsedInt === parsedFloat;
+    return this.manual(asInt ? { intValue: parsedInt } : { floatValue: parsedFloat });
   }
 }

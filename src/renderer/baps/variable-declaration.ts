@@ -50,9 +50,12 @@ export class BapVariableDeclarationVisitor extends BapVisitor {
                 return (prepare) => {
                   // const isUsed = !!this.identifierInstance && context.scope.referencedInChildren.has(this.identifierInstance);
                   // console.log(isUsed, this.identifierInstance, context.scope.referencedInChildren);
-                  const assignStmt = prepare.writeAssignmentStatement();
-                  assignStmt.ref.writeVariableReference(codeVar);
-                  value.writeIntoExpression?.(prepare)?.(assignStmt.value);
+                  const valueWriter = value.writeIntoExpression?.(prepare);
+                  return (block) => {
+                    const assignStmt = block.writeAssignmentStatement();
+                    assignStmt.ref.writeVariableReference(codeVar);
+                    valueWriter?.(assignStmt.value);
+                  };
                 };
               },
             };
@@ -85,7 +88,7 @@ export class BapVariableDeclarationVisitor extends BapVisitor {
       const initializer = decl.initializer ? this.child(decl.initializer) : undefined;
       return {
         identifier,
-        type: this.type(decl),
+        type: this.types.type(decl),
         initializer,
       };
     });
