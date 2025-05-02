@@ -4,7 +4,7 @@ import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
 import { CodeBinaryOperator, CodePrimitiveType } from "../code-writer";
 import { getNodeLabel } from "../ts-helpers";
 import { BapControlFlowScopeType, BapReturnValueSymbol, BapThisSymbol } from '../bap-scope';
-import { BapSubtreeGenerator, BapFunctionLiteral, BapSubtreeValue, BapTypeLiteral } from '../bap-value';
+import { BapSubtreeGenerator, BapFunctionLiteral, BapSubtreeValue, BapTypeLiteral, BapGenerateContext, BapTypeSpec } from '../bap-value';
 import { BapVariableDeclarationVisitor } from './variable-declaration';
 
 export class BapFunctionDeclarationVisitor extends BapVisitor {
@@ -18,14 +18,14 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
     const funcBody = node.body;
     const functionName = node.name.text;
 
-    const parameterSignatures: Array<{ identifier: string, type: ts.Type, isAutoField: boolean }> = [];
+    const parameterEntries: Array<{ identifier: string, type: ts.Type, isAutoField: boolean }> = [];
     const funcType = this.tc.getTypeAtLocation(node);
     const signature = this.tc.getSignaturesOfType(funcType, ts.SignatureKind.Call).at(0);
     if (!this.verifyNotNulllike(signature, `Function has unknown signature.`)) {
       return;
     }
     for (const param of signature.parameters) {
-      parameterSignatures.push({ identifier: param.name, type: this.tc.getTypeOfSymbol(param), isAutoField: false });
+      parameterEntries.push({ identifier: param.name, type: this.tc.getTypeOfSymbol(param), isAutoField: false });
     }
     const returnType = signature.getReturnType();
 
@@ -43,11 +43,15 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
         const funcLiteral: BapFunctionLiteral = {
           type: 'function',
           typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
-          resolve: (args: BapSubtreeValue[], typeArgs: BapTypeLiteral[]) => {
+          resolve: (args: BapSubtreeValue[], typeArgs: BapTypeSpec[]) => {
             // TODO: Perform overload resolution and generic template expansion.
-            // TODO: Insert args into context.
             const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function } });
-            childContext.scope.declare('a', args[0]);
+            for (let i = 0; i < parameterEntries.length; ++i) {
+              const parameterSignature = parameterEntries[i];
+              const argValue = args.at(i) ?? { type: 'error' };
+              // TODO: Sometimes pass copy!!!
+              childContext.scope.declare(parameterSignature.identifier, argValue);
+            }
 
             const returnVarWriter = returnVarGen?.generateRead(childContext);
             const callWriter = body?.generateRead(childContext);
@@ -66,6 +70,10 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
                 return childContext.scope.resolve(BapReturnValueSymbol)?.writeIntoExpression?.(prepare);
               },
             };
+          },
+          generateGpuKernel: () => {
+            console.log('generateGpuKernel', functionName);
+            return undefined;
           },
         };
         context.scope.declare(functionName, funcLiteral);

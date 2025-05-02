@@ -1,9 +1,26 @@
-import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
-import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator } from "../code-writer";
-import { getNodeLabel } from "../ts-helpers";
-import { BapSubtreeGenerator } from '../bap-value';
+import { BapVisitor } from "../bap-visitor";
+import { BapSubtreeGenerator, BapTypeGenerator } from '../bap-value';
+import { BapConstructorSymbol } from '../bap-scope';
+import { BapCallExpressionVisitor } from './call-expression';
+
+export class BapResolveConstructorVisitor extends BapVisitor {
+  manual(
+      {
+        typeGen,
+      }:
+      {
+        typeGen?: BapTypeGenerator;
+      }): BapSubtreeGenerator|undefined {
+    return {
+      generateRead: (context) => {
+        const type = typeGen?.generate(context);
+        let funcValue = type?.prototypeScope.resolve(BapConstructorSymbol, context.scope)?.generateRead(context);
+        return funcValue ?? { type: 'error' };
+      },
+    };
+  }
+}
 
 export class BapNewExpressionVisitor extends BapVisitor {
   impl(node: ts.NewExpression): BapSubtreeGenerator|undefined {
@@ -12,51 +29,16 @@ export class BapNewExpressionVisitor extends BapVisitor {
       this.logAssert(`Function expressions are not supported.`);
       return;
     }
-    const identifier = node.expression.text;
-
     const candidatesOutArray: ts.Signature[] = [];
     const functionSignature = this.tc.getResolvedSignature(node, candidatesOutArray, node.arguments?.length);
     if (!this.verifyNotNulllike(functionSignature, `Function has unresolved signature.`)) {
       return;
     }
-    // console.log(this.tc.signatureToString(functionSignature));
+    console.log(this.tc.signatureToString(functionSignature));
 
-    // const type = this.resolveType(this.tc.getTypeAtLocation(node));
-    // return {
-    //   generateRead: (context: BapGenerateContext) => {
-    //     let innerScope = context.scope;
-    //     if (hasGenericTypeArgs) {
-    //       innerScope = innerScope.makeChild(...);
-    //     }
-    //     const type: BapSubtreeValue|undefined = innerScope.resolve(identifier);
-    //     if (!this.check(type?.type === 'type', `Expected a type for new.`)) {
-    //       return { type: 'error' };
-    //     }
-    //     const func: BapSubtreeValue = type.scope.resolve('constructor');
-    //     if (!this.check(func?.type === 'literal' && func.value.type === 'function', `No constructor found.`)) {
-    //       return { type: 'error' };
-    //     }
-    //     const overload: BapSubtreeValue = func.value.function.resolveOverload(...);
-    //     if (!this.verifyNotNulllike(overload, `Constructor overload not found.`)) {
-    //       return { type: 'error' };
-    //     }
-    //     // Make cached getter in scope. ???
-    //     return {
-    //       type  : 'cached',
-    //       aaa,
-    //     }
-    //   },
-    // };
-    // return this.makeCallBop(node, () => {
-    //   // TODO: Support constructor overloads.
-    //   const constructorRef = createBopReference('constructor', type.innerBlock);
-    //   this.resolve(constructorRef);
-    //   const functionOf = this.resolveFunctionOverload(constructorRef.resolvedRef?.bopType, functionSignature);
-    //   if (!this.verifyNotNulllike(constructorRef.resolvedRef, `Constructor for ${type.debugName} is undefined.`) ||
-    //       !this.verifyNotNulllike(functionOf, `Constructor for ${type.debugName} is undefined.`)) {
-    //     return;
-    //   }
-    //   return { functionVar: constructorRef.resolvedRef, thisVar: undefined, functionOf };
-    // }, node.arguments ?? []);
+    const typeGen = this.types.type(node);
+    const funcGen = new BapResolveConstructorVisitor().manual({ typeGen });
+    const argGens = node.arguments?.map(arg => this.child(arg)) ?? [];
+    return new BapCallExpressionVisitor().manual({ funcGen, argGens });
   }
 }

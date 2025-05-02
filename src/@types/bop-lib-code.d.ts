@@ -282,7 +282,7 @@ declare var Array: ArrayConstructor;
 
 
 interface RelativeIndexable<T> {
-  at(index: int): T | undefined;
+  at(index: int): T;
 }
 interface Array<T> extends RelativeIndexable<T> {}
 

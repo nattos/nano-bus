@@ -4,7 +4,7 @@ import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
 import { CodeBinaryOperator } from "../code-writer";
 import { getNodeLabel } from "../ts-helpers";
 import { BapFunctionDeclarationVisitor } from './function-declaration';
-import { BapSubtreeGenerator, BapGenerateContext, BapFunctionLiteral } from '../bap-value';
+import { BapSubtreeGenerator, BapGenerateContext, BapFunctionLiteral, BapTypeGenerator } from '../bap-value';
 
 export class BapGlobalBlockVisitor extends BapVisitor {
   constructor(context: BapVisitorRootContext) {
@@ -23,9 +23,11 @@ export class BapGlobalBlockVisitor extends BapVisitor {
 
   private implInner(node: ts.SourceFile): BapSubtreeGenerator|undefined {
     const stmts: Array<BapSubtreeGenerator|undefined> = [];
+    const types: Array<{ identifier: string, typeGen: BapTypeGenerator }> = [];
     for (const statement of node.statements) {
       if (ts.isInterfaceDeclaration(statement)) {
         // const newType = this.resolveType(this.tc.getTypeAtLocation(statement));
+        types.push({ identifier: statement.name.text, typeGen: this.types.type(statement) });
       } else if (ts.isClassDeclaration(statement)) {
         // TODO:
         // if (!this.verifyNotNulllike(statement.name, `Anonymous classes not supported.`)) {
@@ -41,6 +43,14 @@ export class BapGlobalBlockVisitor extends BapVisitor {
 
     return {
       generateRead: (context: BapGenerateContext) => {
+        for (const { identifier, typeGen } of types) {
+          context.scope.declare(identifier, {
+            type: 'type',
+            isGenericTypeParameter: false,
+            typeGen: typeGen,
+          });
+        }
+
         let lastFuncLiteral: BapFunctionLiteral|undefined;
         for (const stmt of stmts) {
           if (!stmt) {

@@ -15,7 +15,8 @@ export class BapAssignmentExpressionVisitor extends BapVisitor {
         if (!this.verifyNotNulllike(refGen?.generateWrite, `Left hand side of assignment is not assignable.`)) {
           return { type: 'error' };
         }
-        const value = valueGen?.generateRead(context);
+        const assignTypeSpec = refGen?.generateRead(context).typeSpec;
+        const value = valueGen?.generateRead(context, { willCoerceTo: assignTypeSpec });
         if (!this.verifyNotNulllike(value, `Right hand side of assignment is not a value.`)) {
           return { type: 'error' };
         }

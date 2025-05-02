@@ -8,31 +8,63 @@ import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapRootContextMixin } from './bap-root-context-mixin';
 import { BapVisitorRootContext } from './bap-visitor';
 
+// import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType, BopFunctionConcreteImplDetail, BopFunctionOf } from './bop-type';
+// import { BopBlock, BopIdentifierPrefix, BopGenericFunction, BopPropertyAccessor, BopVariable } from './bop-data';
+
 type StructureKey = string;
 
 export class BapTypes extends BapRootContextMixin {
   private readonly primitives;
+  readonly basic;
   private readonly typesByStructureKey = new Map<StructureKey, BapTypeSpec>();
-  private readonly typesByTsTypeKey = new Map<ts.Type, BapTypeSpec>();
+  private readonly typesByTsTypeKey = new Map<ts.Type, BapTypeGenerator>();
+  private readonly externTypesByIdentifier = new Map<string, BapTypeGenerator>();
   private readonly resolvingSet = new Map<ts.Type, void>();
 
   constructor(context: BapVisitorRootContext) {
     super(context);
 
-    const makePrimitive = (primitiveType: CodePrimitiveType) => {
+    const makePrimitive = (primitiveType: CodePrimitiveType): BapTypeSpec => {
       return {
         prototypeScope: new BapPrototypeScope(), // TODO: Fix!!!
+        staticScope: new BapPrototypeScope(), // TODO: Fix!!!
+        typeParameters: [],
         codeTypeSpec: CodeTypeSpec.fromPrimitive(primitiveType),
+        debugName: primitiveType,
       };
     };
     this.primitives = {
-      [CodePrimitiveType.Void]: makePrimitive(CodePrimitiveType.Bool),
-      [CodePrimitiveType.Type]: makePrimitive(CodePrimitiveType.Bool),
-      [CodePrimitiveType.Function]: makePrimitive(CodePrimitiveType.Bool),
+      [CodePrimitiveType.Void]: makePrimitive(CodePrimitiveType.Void),
+      [CodePrimitiveType.Type]: makePrimitive(CodePrimitiveType.Type),
+      [CodePrimitiveType.Function]: makePrimitive(CodePrimitiveType.Function),
       [CodePrimitiveType.Int]: makePrimitive(CodePrimitiveType.Int),
       [CodePrimitiveType.Bool]: makePrimitive(CodePrimitiveType.Bool),
-      [CodePrimitiveType.CompileError]: makePrimitive(CodePrimitiveType.Bool),
+      [CodePrimitiveType.CompileError]: makePrimitive(CodePrimitiveType.CompileError),
     } satisfies utils.EnumKeyRecord<CodePrimitiveType, BapTypeSpec>;
+
+
+    const basics = (context: BapGenerateContext) => {
+      const resolveBasicType = (identifier: string) => {
+        return this.externTypesByIdentifier.get(identifier)?.generate(context) ?? this.primitiveTypeSpec(CodePrimitiveType.CompileError);
+      };
+      return {
+        float: resolveBasicType('float'),
+        int: resolveBasicType('int'),
+
+        Texture: resolveBasicType('Texture'),
+        MTLDevice: resolveBasicType('MTLDevice'),
+        MTLFunction: resolveBasicType('MTLFunction'),
+        MTLRenderPipelineDescriptor: resolveBasicType('MTLRenderPipelineDescriptor'),
+        MTLRenderPassDescriptor: resolveBasicType('MTLRenderPassDescriptor'),
+        MTLRenderCommandEncoder: resolveBasicType('MTLRenderCommandEncoder'),
+        MTLPrimitiveTypeTriangle: resolveBasicType('MTLPrimitiveTypeTriangle'),
+        MTLComputePipelineDescriptor: resolveBasicType('MTLComputePipelineDescriptor'),
+        MTLComputePassDescriptor: resolveBasicType('MTLComputePassDescriptor'),
+        MTLComputeCommandEncoder: resolveBasicType('MTLComputeCommandEncoder'),
+        BufferFiller: resolveBasicType('BufferFiller'),
+      };
+    };
+    this.basic = basics;
   }
 
   primitiveType(primitiveType: CodePrimitiveType): BapTypeGenerator {
@@ -43,6 +75,11 @@ export class BapTypes extends BapRootContextMixin {
 
   primitiveTypeSpec(primitiveType: CodePrimitiveType): BapTypeSpec {
     return this.primitives[primitiveType];
+  }
+
+  addExternType(externIdentifier: string, tsType: ts.Type, typeGen: BapTypeGenerator) {
+    this.typesByTsTypeKey.set(tsType, typeGen);
+    this.externTypesByIdentifier.set(externIdentifier, typeGen);
   }
 
   // TODO: Move to type resolver with cache!!!
@@ -72,7 +109,27 @@ export class BapTypes extends BapRootContextMixin {
         const requiresFullLookup = requiresGenericLookup || isTypeParameter;
 
         // let found: BapTypeSpec|undefined = undefined;
-        let found = !requiresFullLookup && this.typesByTsTypeKey.get(tsType);
+        let found = this.typesByTsTypeKey.get(tsType)?.generate(context);
+        if (genericBase) {
+          const baseTypeParams = (genericBase as ts.InterfaceType).typeParameters ?? [];
+          const thisTypeArgs = (tsType as ts.TypeReference).typeArguments ?? [];
+          if (!this.check(baseTypeParams.length === thisTypeArgs.length, `Mismatching type arguments.`)) {
+            return this.errorType;
+          }
+          const typeArgGens = thisTypeArgs.map(t => this.type(t));
+          const typeParameterNames = baseTypeParams?.map(t => t.symbol.getName());
+          const typeArgData = utils.zip(typeParameterNames, typeArgGens);
+
+          const innerContext = context.withChildScope();
+          for (const [ name, arg ] of typeArgData) {
+            const typeArgValue = arg.generate(context);
+            innerContext.scope.declare(name, { type: 'type', isGenericTypeParameter: false, typeGen: { generate: () => typeArgValue } });
+          }
+
+          // typeParamsKey = this.toStructureKey(typeArgs);
+          found ??= this.typesByTsTypeKey.get(genericBase)?.generate(innerContext);
+        }
+        // let found = !requiresFullLookup && this.typesByTsTypeKey.get(tsType)?.generate(context);
         // let found = this.typesByTsTypeKey.get(tsType) ?? this.typesByTsSymbolKey.get(tsType.symbol);
         if (found) {
           return found;
@@ -332,6 +389,7 @@ export class BapTypes extends BapRootContextMixin {
           // const typeVar = parentBlock.mapStorageIdentifier(shortName, this.typeType);
 
           const prototypeScope = new BapPrototypeScope();// context.rootContext.withChildScope();
+          const staticScope = new BapPrototypeScope();
           // const fieldMap = new Map<string, BopVariable>();
           for (const property of fields) {
             const fieldIdentifier = fieldIdentifierMap.get(property.identifier)!;
@@ -349,23 +407,28 @@ export class BapTypes extends BapRootContextMixin {
               };
             };
 
-            prototypeScope.declare(property.identifier, fieldIdentifier.fieldVar.identifierToken, {
-              generateRead: (context: BapGenerateContext): BapSubtreeValue => {
-                const thisValue = context.scope.resolve(BapThisSymbol);
-                return {
-                  type: 'cached',
-                  typeSpec: property.type,
-                  writeIntoExpression: (prepare) => {
-                    const thisWriter = thisValue?.writeIntoExpression?.(prepare);
-                    return (expr) => {
-                      const propAccessExpr = expr.writePropertyAccess(fieldIdentifier.fieldVar.identifierToken);
-                      thisWriter?.(propAccessExpr.source);
-                    };
-                  },
-                  generateWrite: (value): BapWriteAsStatementFunc => generateWrite(context, value),
-                };
-              },
-              generateWrite: generateWrite,
+            prototypeScope.declare(property.identifier, {
+              isField: true,
+              token: fieldIdentifier.fieldVar.identifierToken,
+              genType: { generate: () => fieldIdentifier.fieldType, },
+              gen: (bindScope) => ({
+                generateRead: (context: BapGenerateContext): BapSubtreeValue => {
+                  const thisValue = bindScope.resolve(BapThisSymbol);
+                  return {
+                    type: 'cached',
+                    typeSpec: property.type,
+                    writeIntoExpression: (prepare) => {
+                      const thisWriter = thisValue?.writeIntoExpression?.(prepare);
+                      return (expr) => {
+                        const propAccessExpr = expr.writePropertyAccess(fieldIdentifier.fieldVar.identifierToken);
+                        thisWriter?.(propAccessExpr.source);
+                      };
+                    },
+                    generateWrite: (value): BapWriteAsStatementFunc => generateWrite(context, value),
+                  };
+                },
+                generateWrite: generateWrite,
+              }),
             });
             // const fieldVar = innerBlock.mapIdentifier(property.identifier, fieldIdentifier.fieldVar.typeSpec, fieldIdentifier.fieldType);
             // fieldVar.result = fieldIdentifier.fieldVar;
@@ -437,9 +500,12 @@ export class BapTypes extends BapRootContextMixin {
 
           const newType: BapTypeSpec = {
             prototypeScope: prototypeScope,
+            staticScope: staticScope,
+            typeParameters: [],
             codeTypeSpec: CodeTypeSpec.fromStruct(identifier.identifierToken),
+            debugName: shortName,
           };
-          this.typesByTsTypeKey.set(tsType, newType);
+          this.typesByTsTypeKey.set(tsType, { generate: (context) => newType });
           this.typesByStructureKey.set(structureKey, newType);
           return newType;
         } finally {
@@ -452,7 +518,7 @@ export class BapTypes extends BapRootContextMixin {
 
   private structureKeyIdMap = new Map<BapTypeSpec, number>;
 
-  private toStructureKey(fields: BapFields) {
+  toStructureKey(fields: BapFields) {
     let structureKey = '';
     for (const entry of fields) {
       const lookupType = entry.type;
@@ -484,4 +550,3 @@ export class BapTypes extends BapRootContextMixin {
     return this.primitives[CodePrimitiveType.CompileError];
   }
 }
-

@@ -1,10 +1,11 @@
-import { BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue } from "./bap-value";
+import { BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec } from "./bap-value";
 import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
 import { CodeStatementWriter, CodeBinaryOperator, CodeNamedToken, CodePrimitiveType } from "./code-writer";
 
 export type BapIdentifier = string|BapSpecialSymbol;
 export type BapSpecialSymbol = typeof BapThisSymbol|typeof BapReturnValueSymbol|typeof BapBreakBreakFlagSymbol;
 export class BapThisSymbol {};
+export class BapConstructorSymbol {};
 export class BapReturnValueSymbol {};
 export class BapBreakBreakFlagSymbol {};
 export function bapIdentifierToNameHint(identifier: BapIdentifier): string {
@@ -13,6 +14,7 @@ export function bapIdentifierToNameHint(identifier: BapIdentifier): string {
   }
   switch (identifier) {
     case BapThisSymbol: return 'this';
+    case BapConstructorSymbol: return 'constructor';
     case BapReturnValueSymbol: return 'return';
     case BapBreakBreakFlagSymbol: return 'break';
   }
@@ -46,14 +48,42 @@ export class BapIdentifierInstance {
   }
 }
 
+export type BapBindSubtreeGenerator = (bindScope: BapScope) => BapSubtreeGenerator;
+
+export interface BapPrototypeMember {
+  gen: BapBindSubtreeGenerator;
+  genType: BapTypeGenerator;
+  token: CodeNamedToken;
+  isField: boolean;
+}
+
 export class BapPrototypeScope {
-  private readonly map = new Map<BapIdentifier, { gen: BapSubtreeGenerator; token: CodeNamedToken; }>();
-  declare(identifier: BapIdentifier, token: CodeNamedToken, gen: BapSubtreeGenerator) {
-    this.map.set(identifier, { gen: gen, token: token });
+  private readonly map = new Map<BapIdentifier, BapPrototypeMember>();
+
+  readonly arrayOfType?: BapTypeSpec;
+
+  constructor(options?: { arrayOfType?: BapTypeSpec; }) {
+    Object.assign(this, options);
   }
 
-  resolve(identifier: BapIdentifier): BapSubtreeGenerator|undefined {
-    return this.map.get(identifier)?.gen;
+  declare(identifier: BapIdentifier, member: BapPrototypeMember) {
+    this.map.set(identifier, member);
+  }
+
+  get allFields(): [fieldName: BapIdentifier, member: BapPrototypeMember][] {
+    return Array.from(this.map.entries());
+  }
+
+  resolveMember(identifier: BapIdentifier): BapPrototypeMember|undefined {
+    return this.map.get(identifier);
+  }
+
+  resolve(identifier: BapIdentifier, bindScope: BapScope): BapSubtreeGenerator|undefined {
+    return this.map.get(identifier)?.gen?.(bindScope);
+  }
+
+  resolveType(identifier: BapIdentifier): BapTypeGenerator|undefined {
+    return this.map.get(identifier)?.genType;
   }
 
   resolveCodeToken(identifier: BapIdentifier): CodeNamedToken|undefined {
@@ -141,7 +171,7 @@ export class BapScope {
     }
   }
 
-  resolve(identifier: BapIdentifier): BapSubtreeValue|undefined {
+  resolve(identifier: BapIdentifier, options?: { isTypeLookup?: boolean; }): BapSubtreeValue|undefined {
     let scope: BapScope|undefined = this;
     let refScopes: BapScope[] = [];
     let value = undefined;
@@ -152,7 +182,19 @@ export class BapScope {
       if (value) {
         break;
       }
-      prototypeValue = this.bindScope?.thisValue?.typeSpec?.prototypeScope?.resolve(identifier);
+
+      let prototypeScope: BapPrototypeScope|undefined;
+      let prototypeResolveScope: BapScope = this;
+      const thisValue = this.bindScope?.thisValue;
+      if (!options?.isTypeLookup && thisValue) {
+        if (thisValue?.type === 'type' && this.bindContext) {
+          const thisTypeSpec = thisValue.typeGen.generate(this.bindContext);
+          prototypeScope = thisTypeSpec?.staticScope;
+        } else {
+          prototypeScope = thisValue?.typeSpec?.prototypeScope;
+        }
+      }
+      prototypeValue = prototypeScope?.resolve(identifier, prototypeResolveScope);
       if (prototypeValue) {
         break;
       }

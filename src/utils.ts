@@ -549,6 +549,15 @@ export function* range(countOrMin: number, count?: number): Iterable<number> {
   }
 }
 
+export function zip<TLhs, TRhs>(lhs: TLhs[], rhs: TRhs[]): Array<[TLhs, TRhs]> {
+  const length = Math.min(lhs.length, rhs.length);
+  const result = new Array<[TLhs, TRhs]>(length);
+  for (let i = 0; i < length; ++i) {
+    result[i] = [ lhs[i], rhs[i] ];
+  }
+  return result;
+}
+
 export function* appendIfMissing<T>(values: Iterable<T>, toAdd: T) {
   let found = false;
   for (const value of values) {

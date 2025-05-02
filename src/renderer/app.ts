@@ -177,23 +177,27 @@ function test() {
 
 const initialCode5 = `
 interface A {
-  fieldA: number;
+  fieldA: float;
   fieldB: B;
 }
 interface B {
-  fieldA: number;
+  fieldA: float;
+}
+interface C {
+  fieldA: float;
 }
 
-function test() {
+function test(): int {
   const a: A = { fieldA: 1, fieldB: { fieldA: 2 } };
+  const c: C = { fieldA: 1 };
   a.fieldA = 1234;
   a.fieldB.fieldA = 1234;
   a.fieldB = { fieldA: 5432 };
-  return 8 + 2 + a.fieldA;
+  return 8 + 2 + a.fieldA + c.fieldA;
 }
 `;
 
-const initialCode = `
+const initialCode6 = `
 interface A<T> {
   fieldA: T;
   fieldB: B<T>;
@@ -201,17 +205,73 @@ interface A<T> {
 interface B<T> {
   fieldA: T;
 }
+interface C {
+  fieldC: number;
+}
 
 function test2(a: number): number {
   return a + 1;
 }
 
 function test() {
-  const a: A<number> = { fieldA: 1, fieldB: { fieldA: 2 } };
-  a.fieldA = 1234;
-  a.fieldB.fieldA = 1234;
-  a.fieldB = { fieldA: 5432 };
-  return 8 + 2 + a.fieldA + test2(8766);
+  const x: float4 = new float4();
+  1 + x.x;
+  // const a: A<number> = { fieldA: 1, fieldB: { fieldA: 2 } };
+  // a.fieldA = 1234;
+  // a.fieldB.fieldA = 1234;
+  // a.fieldB = { fieldA: 5432 };
+  // return 8 + 2 + a.fieldA + test2(8766);
+}
+`;
+
+const initialCode7 = `
+function test() {
+  const x: float4 = new float4(1, 2, 3, 4);
+  const y = float4.one;
+  // x.test(1);
+  let a: number = 1 + x.x + y.y;
+  return a;
+}
+`;
+
+const initialCode8 = `
+function test() {
+  const a = Array.persistent<float4>(1234);
+  a[0].x = 2;
+  return 1;
+}
+`;
+
+const initialCode = `
+interface TriangleVertex {
+  /* @position */ position: float4;
+  color: float4;
+}
+
+@vertexShader
+function vertexShader(position: TriangleVertex, threadId: int, options: { placeholder: float }): TriangleVertex {
+  return position;
+}
+@fragmentShader
+function fragmentShader(position: TriangleVertex, threadId: int, options: { alpha: float, beta: float, other: { theta: float }, color: float4, someBuf: TriangleVertex[] }): float4 {
+  let color = position.color;
+  // const bufValue = options.someBuf[0].position.x;
+  // const lenValue = options.someBuf.length;
+  // color.x = gpuTest(options.alpha) / options.beta + options.other.theta;
+  // color = color * 5.0 + (-color) * 4.0;
+  return color;
+}
+
+function test() {
+  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
+  positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
+
+  Gpu.renderElements
+      (positions.length, vertexShader, fragmentShader)
+      (positions, { placeholder: 0.2 })
+      ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(1, 1, 1, 1), someBuf: positions });
 }
 `;
 
@@ -265,6 +325,9 @@ export class NanoApp extends LitElement {
       const webGpuContext = this.gpuCanvas.getContext("webgpu")!;
       SharedMTLInternals().setTargetCanvasContext(webGpuContext);
 
+      // const wgslCode = await (await fetch('/example.out.wgsl')).text();
+      // SharedMTLInternals().loadShaderCode(wgslCode);
+
       const fullCode = initialCode;
       const codeLines = fullCode.split('\n');
       const compileResult = await bop.compile(fullCode);
@@ -284,7 +347,6 @@ export class NanoApp extends LitElement {
           debugOutValues: [0],
         })));
       });
-
     });
   }
 
@@ -790,13 +852,3 @@ function getChipLabel(c: CandidateCompletion): string|undefined {
   }
   return undefined;
 }
-
-
-
-
-
-
-
-
-
-

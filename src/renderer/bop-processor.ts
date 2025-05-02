@@ -9,6 +9,7 @@ import { bopRewriteShaderFunction, bopShaderBinding, FuncMutatorFunc, GpuBinding
 import { writeSourceNodeCode } from './bap-processor';
 import { BapVisitorRootContext } from './bap-visitor';
 import { BapTypes } from './bap-types';
+import { BapLibLoader } from './bap-lib-loader';
 
 
 
@@ -96,11 +97,11 @@ export class BopProcessor {
     this.block = this.globalBlock;
 
     this.instanceScope = this.writer.global.scope.createChildScope(CodeScopeType.Class);
-    const instanceVarsTypeIdentifier = this.writer.makeInternalToken('InstanceVars');
+    const instanceVarsTypeIdentifier = this.writer.makeInternalToken('InstanceVars2');
     this.instanceBlockWriter = this.writer.global.writeStruct(instanceVarsTypeIdentifier);
     this.instanceBlockWriter.isInternalOnly = true;
     this.instanceBlockWriter.touchedByGpu = false;
-    const instanceVarsToken = this.writer.makeInternalToken('instanceVars');
+    const instanceVarsToken = this.writer.makeInternalToken('instanceVars2');
     this.instanceVarsIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(instanceVarsTypeIdentifier), BopIdentifierPrefix.Local, 'instanceVars', { fixedIdentifierToken: instanceVarsToken });
 
     // Map intrinsic types.
@@ -210,7 +211,6 @@ const instanceVars = {};
   const continueFlag = PopInternalContinueFlag();
   InternalMarkFrameStart();
   ${runFuncName}();
-  // F1_drawTriangle();
   InternalMarkFrameEnd();
   continueFlag?.resolve(undefined);
 })();
@@ -524,6 +524,7 @@ const instanceVars = {};
         get types() { return types; },
       };
       types = new BapTypes(rootContext);
+
       writeSourceNodeCode(node, rootContext, this.blockWriter, this.writer);
       if (true as any) {
         return;

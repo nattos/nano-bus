@@ -1,6 +1,6 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { BapIdentifier, BapScope, BapThisSymbol } from '../bap-scope';
+import { BapIdentifier } from '../bap-scope';
 import { BapSubtreeGenerator } from '../bap-value';
 
 export class BapPropertyAccessExpressionVisitor extends BapVisitor {
@@ -19,6 +19,7 @@ export class BapPropertyAccessExpressionVisitor extends BapVisitor {
         // TODO: Do not traverse iterative control flow scopes!!!
         const oldValue = thisContext.scope.resolve(identifierName);
         if (oldValue?.type === 'cached' && oldValue.generateWrite) {
+          // This is probably a property accessor.
           writerFunc = oldValue.generateWrite(value);
         } else {
           context.scope.assign(identifierName, value);

@@ -1,6 +1,6 @@
 import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
-import { BapSubtreeGenerator, BapGenerateContext } from "../bap-value";
+import { BapSubtreeGenerator, BapGenerateContext, BapGenerateOptions } from "../bap-value";
 import { BapVisitor } from "../bap-visitor";
 import { CodeBinaryOperator, CodePrimitiveType } from "../code-writer";
 import { getNodeLabel } from "../ts-helpers";
@@ -47,13 +47,40 @@ export class BapBinaryExpressionVisitor extends BapVisitor {
       return;
     }
     return {
-      generateRead: (context: BapGenerateContext) => {
-        const lhsValue = lhs.generateRead(context);
-        const rhsValue = rhs.generateRead(context);
+      generateRead: (context: BapGenerateContext, options?: BapGenerateOptions) => {
+        const floatType = this.types.basic(context).float;
+        const intType = this.types.basic(context).int;
+
+        const prelhsValue = lhs.generateRead(context);
+        const prerhsValue = rhs.generateRead(context);
+        let lhsValue = prelhsValue;
+        let rhsValue = prerhsValue;
+        let resultType = intType;
+
+        const willCoerceToInt = options?.willCoerceTo === intType;
+        const willCoerceToFloat = options?.willCoerceTo === floatType;
+        const willCoerce = willCoerceToInt || willCoerceToFloat;
+        const anyValueInt = prelhsValue.typeSpec === intType || prerhsValue.typeSpec === intType;
+        const anyValueFloat = prelhsValue.typeSpec === floatType || prerhsValue.typeSpec === floatType;
+        const anyType = anyValueInt || anyValueFloat;
+        // console.log(
+        //   'options', options,
+        //   'willCoerceToInt', willCoerceToInt,
+        //   'willCoerceToFloat', willCoerceToFloat,
+        //   'anyValueInt', anyValueInt,
+        //   'anyValueFloat', anyValueFloat,
+        // );
+        if (willCoerce || anyType) {
+          const asFloat = anyValueFloat || (!anyType && willCoerceToFloat);
+          const asType = asFloat ? floatType : intType;
+          lhsValue = lhs.generateRead(context, { willCoerceTo: asType });
+          rhsValue = rhs.generateRead(context, { willCoerceTo: asType });
+          resultType = asType;
+        }
         return {
           // TODO: CACHE THIS!
           type: 'cached',
-          typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Int),
+          typeSpec: resultType,
           writeIntoExpression: (prepare) => {
             const lhsWriter = lhsValue.writeIntoExpression?.(prepare);
             const rhsWriter = rhsValue.writeIntoExpression?.(prepare);

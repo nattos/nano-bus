@@ -6,18 +6,21 @@ import { BapSubtreeGenerator } from '../bap-value';
 
 export class BapNumericLiteralVisitor extends BapVisitor {
   manual({ intValue, floatValue }: { intValue?: number; floatValue?: number; }): BapSubtreeGenerator|undefined {
-    const asInt = intValue !== undefined;
     return {
-      generateRead: () => {
+      generateRead: (context, options) => {
+        const willCoerceToFloat = options?.willCoerceTo === this.types.basic(context).float;
+        const anyIntValue = intValue ?? (Math.round(floatValue ?? 0) | 0);
+        const anyFloatValue = floatValue ?? intValue ?? 0;
+        const asInt = intValue !== undefined && !willCoerceToFloat;
         return {
           type: 'literal',
           typeSpec: this.types.primitiveTypeSpec(asInt ? CodePrimitiveType.Int : CodePrimitiveType.Bool),
           writeIntoExpression: () => {
             return expr => {
               if (asInt) {
-                expr.writeLiteralInt(intValue ?? Number.NaN);
+                expr.writeLiteralInt(anyIntValue);
               } else {
-                expr.writeLiteralFloat(floatValue ?? Number.NaN);
+                expr.writeLiteralFloat(anyFloatValue);
               }
             };
           },
