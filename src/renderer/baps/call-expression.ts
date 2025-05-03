@@ -230,7 +230,7 @@ export interface GpuBindings {
 
 
 
-function resolveBapFields(type: BapTypeSpec, context: BapGenerateContext): BapFields {
+export function resolveBapFields(type: BapTypeSpec, context: BapGenerateContext): BapFields {
   const fields: BapFields = [];
   for (const [fieldName, member] of type.prototypeScope.allFields) {
     if (!member.isField || typeof fieldName !== 'string') {

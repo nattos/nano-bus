@@ -36,6 +36,15 @@ export class BapVisitor extends BapRootContextMixin {
     super(parentContext);
   }
 
+  protected asParent<T>(f: () => T) {
+    const oldParent = BapVisitor.currentParent;
+    BapVisitor.currentParent = this;
+    try {
+      return f();
+    } finally {
+      BapVisitor.currentParent = oldParent;
+    }
+  }
   protected child(node: ts.Node|undefined): BapSubtreeGenerator|undefined {
     if (!node) {
       return;
