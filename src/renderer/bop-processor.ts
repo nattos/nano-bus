@@ -522,6 +522,9 @@ const instanceVars = {};
         sourceRoot: this.sourceRoot,
         tc: this.tc,
         get types() { return types; },
+        globals: {
+          prepareFuncs: this.prepareFuncs,
+        },
       };
       types = new BapTypes(rootContext);
 

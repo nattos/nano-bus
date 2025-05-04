@@ -651,6 +651,7 @@ export class BapLibLoader extends BapRootContextMixin {
       staticScope: staticScope,
       typeParameters: typeParameters,
       codeTypeSpec: CodeTypeSpec.fromStruct(typedefIdentifier),
+      isShadow: false,
       debugName: shortName,
     };
     // const newType = host.createInternalType({

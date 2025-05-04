@@ -259,6 +259,7 @@ function fragmentShader(position: TriangleVertex, threadId: int, options: { alph
   // const lenValue = options.someBuf.length;
   // color.x = gpuTest(options.alpha) / options.beta + options.other.theta;
   // color = color * 5.0 + (-color) * 4.0;
+  color = color + options.color;
   return color;
 }
 

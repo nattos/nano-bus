@@ -52,8 +52,6 @@ module.exports = [
       new CopyWebpackPlugin({
           patterns: [
               { from: 'src/@types/bop-lib-code.d.ts', to: 'bop-lib-code.d.ts' },
-              { from: 'example.out.js', to: 'example.out.js' },
-              { from: 'example.out.wgsl', to: 'example.out.wgsl' },
           ],
       }),
     ],

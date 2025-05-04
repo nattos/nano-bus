@@ -30,6 +30,7 @@ export class BapTypes extends BapRootContextMixin {
         staticScope: new BapPrototypeScope(), // TODO: Fix!!!
         typeParameters: [],
         codeTypeSpec: CodeTypeSpec.fromPrimitive(primitiveType),
+        isShadow: false,
         debugName: primitiveType,
       };
     };
@@ -47,6 +48,16 @@ export class BapTypes extends BapRootContextMixin {
       const resolveBasicType = (identifier: string) => {
         return this.externTypesByIdentifier.get(identifier)?.generate(context) ?? this.primitiveTypeSpec(CodePrimitiveType.CompileError);
       };
+      const resolveInternalType = (identifier: string): BapTypeSpec => {
+        return {
+          prototypeScope: new BapPrototypeScope(),
+          staticScope: new BapPrototypeScope(),
+          typeParameters: [],
+          codeTypeSpec: CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken(identifier)),
+          isShadow: false,
+          debugName: identifier,
+        };
+      };
       const foundTypes = {
         float: resolveBasicType('float'),
         float2: resolveBasicType('float2'),
@@ -55,16 +66,16 @@ export class BapTypes extends BapRootContextMixin {
         int: resolveBasicType('int'),
 
         Texture: resolveBasicType('Texture'),
-        MTLDevice: resolveBasicType('MTLDevice'),
-        MTLFunction: resolveBasicType('MTLFunction'),
-        MTLRenderPipelineDescriptor: resolveBasicType('MTLRenderPipelineDescriptor'),
-        MTLRenderPassDescriptor: resolveBasicType('MTLRenderPassDescriptor'),
-        MTLRenderCommandEncoder: resolveBasicType('MTLRenderCommandEncoder'),
-        MTLPrimitiveTypeTriangle: resolveBasicType('MTLPrimitiveTypeTriangle'),
-        MTLComputePipelineDescriptor: resolveBasicType('MTLComputePipelineDescriptor'),
-        MTLComputePassDescriptor: resolveBasicType('MTLComputePassDescriptor'),
-        MTLComputeCommandEncoder: resolveBasicType('MTLComputeCommandEncoder'),
-        BufferFiller: resolveBasicType('BufferFiller'),
+        MTLDevice: resolveInternalType('MTLDevice'),
+        MTLFunction: resolveInternalType('MTLFunction'),
+        MTLRenderPipelineDescriptor: resolveInternalType('MTLRenderPipelineDescriptor'),
+        MTLRenderPassDescriptor: resolveInternalType('MTLRenderPassDescriptor'),
+        MTLRenderCommandEncoder: resolveInternalType('MTLRenderCommandEncoder'),
+        MTLPrimitiveTypeTriangle: resolveInternalType('MTLPrimitiveTypeTriangle'),
+        MTLComputePipelineDescriptor: resolveInternalType('MTLComputePipelineDescriptor'),
+        MTLComputePassDescriptor: resolveInternalType('MTLComputePassDescriptor'),
+        MTLComputeCommandEncoder: resolveInternalType('MTLComputeCommandEncoder'),
+        BufferFiller: resolveInternalType('BufferFiller'),
       };
       return {
         ...foundTypes,
@@ -174,7 +185,7 @@ export class BapTypes extends BapRootContextMixin {
 
         const parentCodeScope = context.globalWriter.global.scope;
         // const parentBlock = this.globalBlock;
-        const shortName = this.stringifyType(tsType);
+        const shortName = this.stringifyType(tsType).slice(0, 24);
 
         // Create a new type.
         if (!this.check((tsType.flags & ts.TypeFlags.Any) !== ts.TypeFlags.Any, `Type ${utils.stringEmptyToNull(shortName) ?? 'any'} is disallowed.`)) {
@@ -516,6 +527,7 @@ export class BapTypes extends BapRootContextMixin {
             staticScope: staticScope,
             typeParameters: [],
             codeTypeSpec: CodeTypeSpec.fromStruct(identifier.identifierToken),
+            isShadow: false,
             debugName: shortName,
           };
           this.typesByTsTypeKey.set(tsType, { generate: (context) => newType });

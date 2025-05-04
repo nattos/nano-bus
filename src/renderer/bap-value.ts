@@ -130,6 +130,7 @@ export interface BapTypeSpec {
   staticScope: BapPrototypeScope;
   typeParameters: string[];
   codeTypeSpec: CodeTypeSpec;
+  isShadow: boolean;
   debugName: string;
 }
 

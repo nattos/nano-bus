@@ -1,7 +1,8 @@
 import * as utils from '../utils';
 
 const TRACE = true;
-const STRICT = true;
+const DEBUG = true;
+const STRICT = false;
 
 export enum CodeWriterPlatform {
   Metal = 'metal',
@@ -183,6 +184,8 @@ export class CodeWriter {
 
   private readonly internalTokens = new Map<CodeNamedToken, string>();
   private readonly internalTokensInv = new Map<string, CodeNamedToken>();
+
+  readonly errorToken = this.makeInternalToken('error');
 
   constructor() {
   }
@@ -872,6 +875,15 @@ export class CodeStatementWriter implements CodeWriterFragment {
         stream.writeToken(':');
         stream.writeWhitespace();
         stream.writeTypeSpec(thisVar.typeSpec);
+      } else if (context.platform === CodeWriterPlatform.WebGPU && !context.isGpu) {
+        if (DEBUG) {
+          stream.writeWhitespace();
+          stream.writeToken('/*');
+          stream.writeWhitespace();
+          stream.writeTypeSpec(thisVar.typeSpec);
+          stream.writeWhitespace();
+          stream.writeToken('*/');
+        }
       }
       if (result.initializer.isDefined) {
         stream.writeWhitespacePadding();
@@ -1673,6 +1685,26 @@ export class CodeTextStream {
         this.writeToken(str);
       } else if (typeSpec.asStruct) {
         this.writeToken(typeSpec.asStruct);
+
+        if (DEBUG && typeSpec.typeArgs.length > 0) {
+          // TODO: This will break if there are templates in templates!
+          this.writeWhitespacePadding();
+          this.writeToken('/*');
+          this.writeWhitespace();
+          this.writeToken('<');
+          for (let i = 0; i < typeSpec.typeArgs.length; ++i) {
+            const typeArg = typeSpec.typeArgs[i];
+            const isLast = i === typeSpec.typeArgs.length - 1;
+            this.writeTypeSpec(typeArg);
+            if (!isLast) {
+              this.writeToken(',');
+              this.writeWhitespacePadding();
+            }
+          }
+          this.writeToken('>');
+          this.writeWhitespace();
+          this.writeToken('*/');
+        }
       } else {
         throw new Error(`Type ${typeSpec} is undefined.`);
       }

@@ -6,7 +6,7 @@ import { BapRootContextMixin } from '../bap-root-context-mixin';
 import { BopIdentifierPrefix } from '../bop-data';
 import { CodeBinaryOperator, CodeExpressionWriter, CodeNamedToken, CodeScopeType, CodeStatementWriter, CodeTypeSpec, CodeVariable } from '../code-writer';
 import { getNodeLabel } from '../ts-helpers';
-import { BapScope } from '../bap-scope';
+import { BapPrototypeMember, BapPrototypeScope, BapScope } from '../bap-scope';
 import { BapPropertyAccessExpressionVisitor } from './property-access-expression';
 
 export class BapCallExpressionVisitor extends BapVisitor {
@@ -220,7 +220,7 @@ class BufferFiller {
 export interface GpuBindingBase {
   nameHint: string;
   location: number;
-  unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BapScope): void;
+  unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void;
 }
 export interface GpuFixedBinding extends GpuBindingBase {
   type: 'fixed';
@@ -375,8 +375,9 @@ export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, b
     const marshalStructWriter = writer.global.writeStruct(marshalStructIdentifier);
     const marshalStructScope = writer.global.scope.createChildScope(CodeScopeType.Class);
     // const marshalStructBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
+    marshalStructWriter.touchedByCpu = false;
     marshalStructWriter.touchedByGpu = true;
-    const marshalStructFields = [];
+    const unmarshalFields: Array<{ marshaledVar: CodeVariable; type: BapTypeSpec; path: PathPart[]; }> = [];
 
     let fieldIndex = 0;
     for (const field of collectedCopyFields) {
@@ -386,7 +387,7 @@ export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, b
       const rawField = marshalStructScope.allocateVariableIdentifier(bopType.codeTypeSpec, BopIdentifierPrefix.Field, nameHint);
       // rawBopVar.result = rawField;
       marshalStructWriter.body.writeField(rawField.identifierToken, bopType.codeTypeSpec);
-      marshalStructFields.push({ identifier: rawField.identifierToken, type: bopType });
+      unmarshalFields.push({ marshaledVar: rawField, type: bopType, path: field.path });
       field.marshalStructField = rawField;
       fieldIndex++;
     }
@@ -435,37 +436,64 @@ export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, b
           }
         });
       },
-      unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BapScope): void {
-        // const rootBlock = intoBopVar.lookupBlockOverride ?? self.globalBlock.createChildBlock(CodeScopeType.Local);
-        // for (const field of collectedCopyFields) {
-        //   const fieldType = field.type === 'float' ? basics.float : basics.int;
-        //   let childBlock = rootBlock;
-        //   let leafVar;
-        //   for (const part of field.path) {
-        //     const fieldName = part.identifier.nameHint;
-        //     let fieldVar = childBlock.identifierMap.get(fieldName);
-        //     if (!fieldVar) {
-        //       fieldVar = childBlock.mapIdentifier(fieldName, part.bopType.codeTypeSpec, part.bopType);
-        //       fieldVar.requiresDirectAccess = true;
-        //       fieldVar.lookupBlockOverride = childBlock.createChildBlock(CodeScopeType.Local);
-        //     }
-        //     childBlock = fieldVar.lookupBlockOverride!;
-        //     leafVar = fieldVar;
-        //   }
-        //   if (leafVar) {
-        //     const proxyVar = body.scope.allocateVariableIdentifier(fieldType.codeTypeSpec, BopIdentifierPrefix.Local, field.path.map(f => f.identifier.nameHint).join('_'));
-        //     body.writeVariableDeclaration(proxyVar)
-        //         .initializer.writeExpression().writePropertyAccess(field.marshalStructField!.identifierToken)
-        //         .source.writeVariableReference(dataVar);
-        //     leafVar.result = proxyVar;
-
-        //     if (field.forBindArray) {
-        //       field.forBindArray.entry.marshalStructFields.length = proxyVar;
-        //     }
-        //   }
-        // }
-        // intoBopVar.requiresDirectAccess = true;
-        // intoBopVar.lookupBlockOverride = rootBlock;
+      unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
+        const rootScope = intoContext;
+        for (const field of unmarshalFields) {
+          let childScope = rootScope;
+          let leafVar;
+          for (let i = 0; i < field.path.length; ++i) {
+            const part = field.path[i];
+            const requiresShadow = i < field.path.length - 1;
+            const fieldName = part.identifier;
+            let fieldVar: BapPrototypeMember|undefined = childScope.resolveMember(fieldName);
+            if (fieldVar) {
+              if (requiresShadow) {
+                const shadowType = fieldVar.genType.generate(context);
+                if (!shadowType || !shadowType.isShadow) {
+                  break;
+                }
+                childScope = shadowType.prototypeScope;
+              }
+            } else {
+              const prototypeScope = new BapPrototypeScope();
+              const staticScope = new BapPrototypeScope();
+              const shadowType: BapTypeSpec = {
+                prototypeScope: prototypeScope,
+                staticScope: staticScope,
+                typeParameters: [],
+                codeTypeSpec: part.bopType.codeTypeSpec,
+                isShadow: true,
+                debugName: part.bopType.debugName + '_shadow',
+              };
+              fieldVar = {
+                gen: (bindScope) => { return ({ generateRead: () => ({
+                  type: 'eval',
+                  typeSpec: shadowType,
+                }) }); },
+                genType: { generate: () => { return shadowType; } },
+                token: context.globalWriter.errorToken,
+                isField: true,
+              };
+              childScope.declare(fieldName, fieldVar);
+              childScope = prototypeScope;
+            }
+            if (requiresShadow && !fieldVar?.genType.generate(context)?.isShadow) {
+              break;
+            }
+            leafVar = fieldVar;
+          }
+          if (leafVar) {
+            leafVar.gen = (bindScope) => { return ({ generateRead: () => ({
+              type: 'eval',
+              typeSpec: field.type,
+              writeIntoExpression: (prepare) => {
+                return (expr) => {
+                  expr.writePropertyAccess(field.marshaledVar.identifierToken).source.writeVariableReference(dataVar);
+                };
+              },
+            }) }) };
+          }
+        }
       },
     });
   }
@@ -712,7 +740,7 @@ export function bopRenderElementsCall(
             const initFunc = writer.global.writeFunction(initFuncIdentifier.identifierToken);
             initFunc.touchedByCpu = true;
             initFunc.returnTypeSpec = CodeTypeSpec.voidType;
-            // this.prepareFuncs.push(initFuncIdentifier);
+            this.rootContext.globals.prepareFuncs.push(initFuncIdentifier);
             const blockWriter = initFunc.body;
 
             const allocTmpOut = (type: BapTypeSpec): CodeVariable => {

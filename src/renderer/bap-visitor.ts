@@ -2,7 +2,7 @@ import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
 import { BapFields, BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec, BapWriteAsStatementFunc, BapWriteIntoExpressionFunc } from "./bap-value";
 import { getNodeLabel } from "./ts-helpers";
-import { CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
+import { CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
 import { BopIdentifierPrefix } from './bop-data';
 import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapTypes } from './bap-types';
@@ -17,6 +17,9 @@ export interface BapVisitorRootContext {
   readonly sourceRoot: ts.SourceFile;
   readonly tc: ts.TypeChecker;
   readonly types: BapTypes;
+  readonly globals: {
+    prepareFuncs: CodeVariable[];
+  };
 }
 
 interface VistorDecl {
