@@ -1,6 +1,7 @@
 import * as utils from '../utils';
 
 const TRACE = true;
+const STRICT = true;
 
 export enum CodeWriterPlatform {
   Metal = 'metal',
@@ -1100,7 +1101,13 @@ export class CodeExpressionWriterBase implements CodeWriterFragment {
 
   get writerFunc(): CodeWriterFunc {
     if (!this.writerFuncField) {
-      throw new Error(`Expression is not yet defined.${this.trace}`);
+      const error = new Error(`Expression is not yet defined.${this.trace}`);
+      console.error(error);
+      if (STRICT) {
+        throw error;
+      } else {
+        return (stream, context) => { stream.writeToken('***error***'); };
+      }
     }
     return this.writerFuncField;
   }

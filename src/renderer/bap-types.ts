@@ -47,8 +47,11 @@ export class BapTypes extends BapRootContextMixin {
       const resolveBasicType = (identifier: string) => {
         return this.externTypesByIdentifier.get(identifier)?.generate(context) ?? this.primitiveTypeSpec(CodePrimitiveType.CompileError);
       };
-      return {
+      const foundTypes = {
         float: resolveBasicType('float'),
+        float2: resolveBasicType('float2'),
+        float3: resolveBasicType('float3'),
+        float4: resolveBasicType('float4'),
         int: resolveBasicType('int'),
 
         Texture: resolveBasicType('Texture'),
@@ -62,6 +65,16 @@ export class BapTypes extends BapRootContextMixin {
         MTLComputePassDescriptor: resolveBasicType('MTLComputePassDescriptor'),
         MTLComputeCommandEncoder: resolveBasicType('MTLComputeCommandEncoder'),
         BufferFiller: resolveBasicType('BufferFiller'),
+      };
+      return {
+        ...foundTypes,
+        copyMarshallableSet: new Set([
+          foundTypes.float,
+          foundTypes.float2,
+          foundTypes.float3,
+          foundTypes.float4,
+          foundTypes.int,
+        ]),
       };
     };
     this.basic = basics;

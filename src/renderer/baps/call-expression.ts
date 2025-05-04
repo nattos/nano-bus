@@ -7,6 +7,7 @@ import { BopIdentifierPrefix } from '../bop-data';
 import { CodeBinaryOperator, CodeExpressionWriter, CodeNamedToken, CodeScopeType, CodeStatementWriter, CodeTypeSpec, CodeVariable } from '../code-writer';
 import { getNodeLabel } from '../ts-helpers';
 import { BapScope } from '../bap-scope';
+import { BapPropertyAccessExpressionVisitor } from './property-access-expression';
 
 export class BapCallExpressionVisitor extends BapVisitor {
   manual(
@@ -174,22 +175,23 @@ class BufferFiller {
   constructor(readonly context: BapGenerateContext, readonly cpuVar: CodeVariable) {
   }
 
-  writeCpu(type: 'int'|'float', byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
-    if (type === 'float') {
-      return this.writeCpuWriteFloat(byteOffset, body);
-    } else {
-      return this.writeCpuWriteInt(byteOffset, body);
-    }
+  writeCpu(copyAsType: BapTypeSpec, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
+    return this.writeCpuWrite(copyAsType.codeTypeSpec, byteOffset, body);
+    // if (type === 'float') {
+    //   return this.writeCpuWriteFloat(byteOffset, body);
+    // } else {
+    //   return this.writeCpuWriteInt(byteOffset, body);
+    // }
   }
-  writeCpuWriteFloat(byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
-    return this.writeCpuWrite(this.context.globalWriter.makeInternalToken('writeFloat'), byteOffset, body);
-  }
-  writeCpuWriteInt(byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
-    return this.writeCpuWrite(this.context.globalWriter.makeInternalToken('writeInt'), byteOffset, body);
-  }
+  // writeCpuWriteFloat(byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
+  //   return this.writeCpuWrite(this.context.globalWriter.makeInternalToken('writeFloat'), byteOffset, body);
+  // }
+  // writeCpuWriteInt(byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
+  //   return this.writeCpuWrite(this.context.globalWriter.makeInternalToken('writeInt'), byteOffset, body);
+  // }
 
-  private writeCpuWrite(writeMethod: CodeNamedToken, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
-    const callExpr = body.writeExpressionStatement().expr.writeMethodCall(writeMethod);
+  private writeCpuWrite(writeMethod: CodeTypeSpec, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
+    const callExpr = body.writeExpressionStatement().expr.writeMethodCall(writeMethod.asStruct!);
     callExpr.source.writeVariableReference(this.cpuVar);
     if (this.baseOffsetVar) {
       const addOp = callExpr.addArg().writeBinaryOperation(CodeBinaryOperator.Add);
@@ -200,6 +202,18 @@ class BufferFiller {
     }
     return callExpr.addArg();
   }
+  // private writeCpuWrite(writeMethod: CodeNamedToken, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
+  //   const callExpr = body.writeExpressionStatement().expr.writeMethodCall(writeMethod);
+  //   callExpr.source.writeVariableReference(this.cpuVar);
+  //   if (this.baseOffsetVar) {
+  //     const addOp = callExpr.addArg().writeBinaryOperation(CodeBinaryOperator.Add);
+  //     addOp.lhs.writeVariableReference(this.baseOffsetVar);
+  //     addOp.rhs.writeLiteralInt(byteOffset);
+  //   } else {
+  //     callExpr.addArg().writeLiteralInt(byteOffset);
+  //   }
+  //   return callExpr.addArg();
+  // }
 }
 
 
@@ -211,7 +225,8 @@ export interface GpuBindingBase {
 export interface GpuFixedBinding extends GpuBindingBase {
   type: 'fixed';
   byteLength: number;
-  marshalStructType: BapTypeSpec;
+  // marshalStructType: BapTypeSpec;
+  marshalStructCodeTypeSpec: CodeTypeSpec;
   marshal(dataVar: CodeVariable, bufferVars: BufferFiller, body: CodeStatementWriter): void;
 }
 export interface GpuArrayBinding extends GpuBindingBase {
@@ -249,7 +264,7 @@ export function resolveBapFields(type: BapTypeSpec, context: BapGenerateContext)
 }
 
 
-function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType: BapTypeSpec, visitedSet?: Set<BapTypeSpec>): GpuBindings {
+export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType: BapTypeSpec, visitedSet?: Set<BapTypeSpec>): GpuBindings {
   const bopProcessor = this;
   const writer = context.globalWriter;
   const basics = this.types.basic(context);
@@ -275,7 +290,8 @@ function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType:
     bopType: BapTypeSpec;
   }
   interface CopyField {
-    type: 'int'|'float';
+    // type: 'int'|'float';
+    copyAsType: BapTypeSpec;
     path: PathPart[];
     marshalStructField?: CodeVariable;
     forBindArray?: {
@@ -304,15 +320,10 @@ function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType:
     for (const field of fields) {
       const fieldIdentifier = field.identifier;
       const fieldSubpath = subpath.concat({ identifier: fieldIdentifier, bopType: field.type });
-      if (field.type === basics.int) {
+      if (basics.copyMarshallableSet.has(field.type)) {
         collectedCopyFields.push({
           path: fieldSubpath,
-          type: 'int',
-        });
-      } else if (field.type === basics.float) {
-        collectedCopyFields.push({
-          path: fieldSubpath,
-          type: 'float',
+          copyAsType: field.type,
         });
       } else if (field.type === basics.Texture) {
         const bindArray: BindTexture = {
@@ -338,7 +349,7 @@ function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType:
         collectedArrays.push(bindArray);
         collectedCopyFields.push({
           path: fieldSubpath.concat({ identifier: 'length', bopType: basics.int }),
-          type: 'int',
+          copyAsType: basics.int,
           forBindArray: {
             entry: bindArray,
             field: 'length',
@@ -352,8 +363,8 @@ function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType:
         popVisitType(field.type);
       }
     }
-    visitRec([], typeFields);
   }
+  visitRec([], typeFields);
   popVisitType(bopType);
 
   const bindings: GpuBinding[] = [];
@@ -369,7 +380,7 @@ function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType:
 
     let fieldIndex = 0;
     for (const field of collectedCopyFields) {
-      const bopType = field.type === 'float' ? basics.float : basics.int;
+      const bopType = field.copyAsType;
       const nameHint = `${fieldIndex}_${field.path.map(p => p.identifier).join('_')}`;
       // const rawBopVar = marshalStructBlock.mapIdentifier(`${fieldIndex}_${nameHint}`, bopType.storageType, bopType);
       const rawField = marshalStructScope.allocateVariableIdentifier(bopType.codeTypeSpec, BopIdentifierPrefix.Field, nameHint);
@@ -380,7 +391,7 @@ function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType:
       fieldIndex++;
     }
 
-    // // TODO: Finish conversion!
+    const marshalStructCodeTypeSpec = CodeTypeSpec.fromStruct(marshalStructIdentifier);
     // const marshalStructType: BapTypeSpec = BopType.createPassByValue({
     //   debugName: marshalStructIdentifier.nameHint,
     //   valueType: CodeTypeSpec.fromStruct(marshalStructIdentifier),
@@ -389,59 +400,74 @@ function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType:
     //   structOf: new BopStructType(marshalStructFields),
     // });
 
-    // const self = this;
-    // bindings.push({
-    //   type: 'fixed',
-    //   nameHint: collectedCopyFields.map(f => f.path.at(-1)?.identifier ?? 'unknown').join('_'),
-    //   location: bindings.length,
-    //   byteLength: byteLength,
-    //   marshalStructType: marshalStructType,
-    //   marshal(dataVar: CodeVariable, bufferFiller: BufferFiller, body: CodeStatementWriter): void {
-    //     let offset = 0;
-    //     for (const field of collectedCopyFields) {
-    //       let readExprLeaf = bufferFiller.writeCpu(field.type, offset, body);
-    //       for (let i = field.path.length - 1; i >= 0; --i) {
-    //         const pathPart = field.path[i];
-    //         const propAccess = readExprLeaf.writePropertyAccess(pathPart.identifier);
-    //         readExprLeaf = propAccess.source;
-    //       }
-    //       readExprLeaf.writeVariableReference(dataVar);
-    //       offset += 4;
-    //     }
-    //   },
-    //   unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BapScope): void {
-    //     const rootBlock = intoBopVar.lookupBlockOverride ?? self.globalBlock.createChildBlock(CodeScopeType.Local);
-    //     for (const field of collectedCopyFields) {
-    //       const fieldType = field.type === 'float' ? basics.float : basics.int;
-    //       let childBlock = rootBlock;
-    //       let leafVar;
-    //       for (const part of field.path) {
-    //         const fieldName = part.identifier.nameHint;
-    //         let fieldVar = childBlock.identifierMap.get(fieldName);
-    //         if (!fieldVar) {
-    //           fieldVar = childBlock.mapIdentifier(fieldName, part.bopType.codeTypeSpec, part.bopType);
-    //           fieldVar.requiresDirectAccess = true;
-    //           fieldVar.lookupBlockOverride = childBlock.createChildBlock(CodeScopeType.Local);
-    //         }
-    //         childBlock = fieldVar.lookupBlockOverride!;
-    //         leafVar = fieldVar;
-    //       }
-    //       if (leafVar) {
-    //         const proxyVar = body.scope.allocateVariableIdentifier(fieldType.codeTypeSpec, BopIdentifierPrefix.Local, field.path.map(f => f.identifier.nameHint).join('_'));
-    //         body.writeVariableDeclaration(proxyVar)
-    //             .initializer.writeExpression().writePropertyAccess(field.marshalStructField!.identifierToken)
-    //             .source.writeVariableReference(dataVar);
-    //         leafVar.result = proxyVar;
+    const self = this;
+    bindings.push({
+      type: 'fixed',
+      nameHint: collectedCopyFields.map(f => f.path.at(-1)?.identifier ?? 'unknown').join('_'),
+      location: bindings.length,
+      byteLength: byteLength,
+      marshalStructCodeTypeSpec: marshalStructCodeTypeSpec,
+      marshal(dataVar: CodeVariable, bufferFiller: BufferFiller, body: CodeStatementWriter): void {
+        self.asParent(() => {
+          let offset = 0;
+          for (const field of collectedCopyFields) {
+            let leafGen: BapSubtreeGenerator|undefined = {
+              generateRead: () => {
+                return {
+                  type: 'cached',
+                  typeSpec: bopType,
+                  writeIntoExpression: () => {
+                    return (expr) => {
+                      expr.writeVariableReference(dataVar);
+                    };
+                  }
+                };
+              }
+            };
+            for (const part of field.path) {
+              leafGen = new BapPropertyAccessExpressionVisitor().manual({ thisGen: leafGen, identifierName: part.identifier });
+            }
+            const leafValue = leafGen?.generateRead(context);
+            const leafWriter = leafValue?.writeIntoExpression?.(body);
+            const readExprLeaf = bufferFiller.writeCpu(field.copyAsType, offset, body);
+            leafWriter?.(readExprLeaf);
+            offset += 4;
+          }
+        });
+      },
+      unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BapScope): void {
+        // const rootBlock = intoBopVar.lookupBlockOverride ?? self.globalBlock.createChildBlock(CodeScopeType.Local);
+        // for (const field of collectedCopyFields) {
+        //   const fieldType = field.type === 'float' ? basics.float : basics.int;
+        //   let childBlock = rootBlock;
+        //   let leafVar;
+        //   for (const part of field.path) {
+        //     const fieldName = part.identifier.nameHint;
+        //     let fieldVar = childBlock.identifierMap.get(fieldName);
+        //     if (!fieldVar) {
+        //       fieldVar = childBlock.mapIdentifier(fieldName, part.bopType.codeTypeSpec, part.bopType);
+        //       fieldVar.requiresDirectAccess = true;
+        //       fieldVar.lookupBlockOverride = childBlock.createChildBlock(CodeScopeType.Local);
+        //     }
+        //     childBlock = fieldVar.lookupBlockOverride!;
+        //     leafVar = fieldVar;
+        //   }
+        //   if (leafVar) {
+        //     const proxyVar = body.scope.allocateVariableIdentifier(fieldType.codeTypeSpec, BopIdentifierPrefix.Local, field.path.map(f => f.identifier.nameHint).join('_'));
+        //     body.writeVariableDeclaration(proxyVar)
+        //         .initializer.writeExpression().writePropertyAccess(field.marshalStructField!.identifierToken)
+        //         .source.writeVariableReference(dataVar);
+        //     leafVar.result = proxyVar;
 
-    //         if (field.forBindArray) {
-    //           field.forBindArray.entry.marshalStructFields.length = proxyVar;
-    //         }
-    //       }
-    //     }
-    //     intoBopVar.requiresDirectAccess = true;
-    //     intoBopVar.lookupBlockOverride = rootBlock;
-    //   },
-    // });
+        //     if (field.forBindArray) {
+        //       field.forBindArray.entry.marshalStructFields.length = proxyVar;
+        //     }
+        //   }
+        // }
+        // intoBopVar.requiresDirectAccess = true;
+        // intoBopVar.lookupBlockOverride = rootBlock;
+      },
+    });
   }
   for (const binding of collectedArrays) {
     const self = this;
@@ -985,8 +1011,8 @@ export function bopRenderElementsCall(
             const fragmentOptionsVar = allocTmpOut(fragmentOptionsValue?.typeSpec!);
             const fragmentOptionsVarDecl = blockWriter.writeVariableDeclaration(fragmentOptionsVar);
             vertexOptionsWriter?.(vertexOptionsVarDecl.initializer.writeExpression());
-            // bindBindings(vertexFunctionValue., vertexOptionsVar, 'Vertex');
-            // bindBindings(fragmentFunction, fragmentOptionsVar, 'Fragment');
+            bindBindings(vertexKernel.bindings, vertexOptionsVar, 'Vertex');
+            bindBindings(fragmentKernel.bindings, fragmentOptionsVar, 'Fragment');
             // {
             //   const call = blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(writer.makeInternalToken('EncoderSetFragmentBytes'));
             //   call.addArg().writeVariableReference(encoderVar);

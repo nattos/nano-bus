@@ -7,7 +7,7 @@ import { BapControlFlowScopeType, BapReturnValueSymbol, BapThisSymbol } from '..
 import { BapSubtreeGenerator, BapFunctionLiteral, BapSubtreeValue, BapTypeLiteral, BapGenerateContext, BapTypeSpec, BapFields } from '../bap-value';
 import { BapVariableDeclarationVisitor } from './variable-declaration';
 import { BopIdentifierPrefix } from '../bop-data';
-import { GpuBindings, resolveBapFields } from './call-expression';
+import { GpuBindings, GpuFixedBinding, makeGpuBindings, resolveBapFields } from './call-expression';
 import { BapPropertyAccessExpressionVisitor } from './property-access-expression';
 import { BapIdentifierExpressionVisitor } from './identifier-expression';
 
@@ -78,6 +78,7 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
           },
           generateGpuKernel: () => {
             console.log('generateGpuKernel', functionName);
+            const basics = this.types.basic(context);
 
             const kernelIdentifier = context.globalWriter.global.scope.allocateIdentifier(BopIdentifierPrefix.Function, functionName);
             const kernelFunc = context.globalWriter.global.writeFunction(kernelIdentifier);
@@ -167,6 +168,8 @@ const bindingLocation = isGpuVertexFunc ? CodeAttributeKey.GpuVertexBindingLocat
 
 let paramIndex = 0;
 let optionsGpuBindings: GpuBindings|undefined;
+let vertexMarshalCodeTypeSpec: CodeTypeSpec|undefined;
+let fixedBindingsCodeTypeSpec: CodeTypeSpec|undefined;
 for (const param of parameterEntries) {
   const paramType = this.types.type(param.type).generate(context);
   // paramDecls.push({ type: paramType, identifier: param.identifier });
@@ -186,7 +189,7 @@ for (const param of parameterEntries) {
     //   funcWriter.body.writeVariableDeclaration(mappedArgVar);
     // });
     const paramVar = childCodeScope.allocateVariableIdentifier(paramType.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, param.identifier);
-    kernelFunc.addParam(CodeTypeSpec.fromStruct(vertexStructIdentifier), paramVar.identifierToken);
+    vertexMarshalCodeTypeSpec = CodeTypeSpec.fromStruct(vertexStructIdentifier);
 
     let fieldIndex = 0;
     for (const field of resolveBapFields(paramType, context)) {
@@ -211,12 +214,18 @@ for (const param of parameterEntries) {
     // const argVar = functionBlock.mapTempIdentifier(param.identifier, this.uintType);
     // params.push({ var: argVar, attribs: [ { key: CodeAttributeKey.GpuBindVertexIndex } ] });
   } else if (paramIndex === optionsParamIndex) {
-    // const optionsBopType = this.resolveType(param.type, { inBlock: functionBlock });
+    const optionsBopType = this.types.type(param.type).generate(context);
+    if (!optionsBopType) {
+      continue;
+    }
     // if (optionsBopType.structOf) {
     //   // HACK!
     //   optionsBopType.structOf.touchedByGpu = false;
     // }
-    // optionsGpuBindings = makeGpuBindings.bind(this)(optionsBopType);
+    optionsGpuBindings = makeGpuBindings.bind(this)(context, optionsBopType);
+    console.log(optionsGpuBindings);
+
+    fixedBindingsCodeTypeSpec = (optionsGpuBindings.bindings.find(b => b.type === 'fixed') as GpuFixedBinding|undefined)?.marshalStructCodeTypeSpec;
     // const argVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
     // argVar.requiresDirectAccess = true;
     // for (const binding of optionsGpuBindings.bindings) {
@@ -305,22 +314,38 @@ for (const param of parameterEntries) {
 
             kernelFunc.returnTypeSpec = marshalReturnCodeTypeSpec;
 
-            for (let i = 0; i < parameterEntries.length; ++i) {
-              const param = parameterEntries[i];
-              const type = this.types.type(param.type).generate(context);
-              const paramVar = childCodeScope.allocateVariableIdentifier(type?.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, param.identifier);
-              kernelFunc.addParam(paramVar.typeSpec, paramVar.identifierToken);
-              childContext.scope.declare(
-                param.identifier,
-                {
-                  type: 'cached',
-                  typeSpec: type,
-                  writeIntoExpression: (prepare) => {
-                    return (expr) => expr.writeVariableReference(paramVar);
-                  },
-                }
-              );
+            // TODO: No! Read from bindings!!!
+            const kernelParams = [];
+            const vertexVar = childCodeScope.allocateVariableIdentifier(vertexMarshalCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, 'vertex');
+            const threadIdVar = childCodeScope.allocateVariableIdentifier(basics.int.codeTypeSpec, BopIdentifierPrefix.Local, 'threadId');
+            const fixedVar = childCodeScope.allocateVariableIdentifier(fixedBindingsCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, 'fixed');
+            if (vertexMarshalCodeTypeSpec) {
+              kernelParams.push({ index: vertexParamIndex, typeSpec: vertexVar.typeSpec, codeVar: vertexVar });
             }
+            kernelParams.push({ index: threadIdParamIndex, typeSpec: threadIdVar.typeSpec, codeVar: threadIdVar });
+            if (fixedBindingsCodeTypeSpec) {
+              kernelParams.push({ index: optionsParamIndex, typeSpec: fixedVar.typeSpec, codeVar: fixedVar });
+            }
+            kernelParams.sort((a, b) => a.index - b.index);
+            for (const kernelParam of kernelParams) {
+              kernelFunc.addParam(kernelParam.typeSpec, kernelParam.codeVar.identifierToken);
+            }
+            // for (let i = 0; i < parameterEntries.length; ++i) {
+            //   const param = parameterEntries[i];
+            //   const type = this.types.type(param.type).generate(context);
+            //   const paramVar = childCodeScope.allocateVariableIdentifier(type?.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, param.identifier);
+            //   kernelFunc.addParam(paramVar.typeSpec, paramVar.identifierToken);
+            //   childContext.scope.declare(
+            //     param.identifier,
+            //     {
+            //       type: 'cached',
+            //       typeSpec: type,
+            //       writeIntoExpression: (prepare) => {
+            //         return (expr) => expr.writeVariableReference(paramVar);
+            //       },
+            //     }
+            //   );
+            // }
 
             const returnVarWriter = returnVarGen?.generateRead(childContext);
             const callWriter = body?.generateRead(childContext);
@@ -341,7 +366,10 @@ for (const param of parameterEntries) {
               prop.accessor(returnValueGen)?.generateRead(childContext).writeIntoExpression?.(prepare)?.(fieldInitExpr);
             }
             prepare.writeReturnStatement().expr.writeVariableReference(marshalReturnVar);
-            return undefined;
+            return {
+              token: kernelIdentifier,
+              bindings: optionsGpuBindings ?? { bindings: [] },
+            };
           },
         };
         context.scope.declare(functionName, funcLiteral);
