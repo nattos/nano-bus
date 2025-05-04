@@ -1,4 +1,8 @@
 
+export const WGSL_LIB_PREAMBLE_CODE = `
+diagnostic(off, derivative_uniformity);
+alias CompileError = i32;
+`;
 export const WGSL_LIB_CODE = `
 
 fn BopLib_float4_constructor(x: f32, y: f32, z: f32, w: f32) -> vec4f { return vec4f(x, y, z, w); }

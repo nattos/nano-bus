@@ -1,5 +1,5 @@
 import * as utils from '../utils';
-import { WGSL_LIB_CODE } from './bop-wgsl-lib';
+import { WGSL_LIB_CODE, WGSL_LIB_PREAMBLE_CODE } from './bop-wgsl-lib';
 
 
 
@@ -117,8 +117,8 @@ const BopLib = {
       return x;
     },
     marshalByteStride: 4,
-    marshalBytesInto(value: number, into: BufferFiller, indexOffset: number): void {
-      into.writeFloat(indexOffset * 4, value);
+    marshalBytesInto(value: float, into: BufferFiller, indexOffset: number): void {
+      into.write_float(0, value);
     },
   },
   get float4() { return BopFloat4; },
@@ -148,10 +148,7 @@ class BopFloat4 {
 
   static marshalByteStride: number = BopLib.float.marshalByteStride * 4;
   static marshalBytesInto(value: BopFloat4, into: BufferFiller, indexOffset: number): void {
-    BopLib.float.marshalBytesInto(value.x, into, indexOffset * 4 + 0);
-    BopLib.float.marshalBytesInto(value.y, into, indexOffset * 4 + 1);
-    BopLib.float.marshalBytesInto(value.z, into, indexOffset * 4 + 2);
-    BopLib.float.marshalBytesInto(value.w, into, indexOffset * 4 + 3);
+    into.write_float4(0, value as unknown as float4);
   }
 
   x: number;
@@ -436,21 +433,38 @@ class BopTexture {
 
 
 export class BufferFiller {
-  arrayBuffer;
-  float32Buffer;
-  int32Buffer;
+  readonly arrayBuffer;
+  readonly dataView;
+  private writeOffset = 0;
 
   constructor(readonly byteLength: number) {
-    this.arrayBuffer = new ArrayBuffer(byteLength);
-    this.float32Buffer = new Float32Array(this.arrayBuffer);
-    this.int32Buffer = new Float32Array(this.arrayBuffer);
+    this.arrayBuffer = new ArrayBuffer(Math.max(48, byteLength));
+    this.dataView = new DataView(this.arrayBuffer);
   }
 
-  writeFloat(offset: number, value: number) {
-    this.float32Buffer[offset >> 2] = value;
+  // TODO: Remove offset param.
+  write_float(offset: number, value: float) {
+    this.dataView.setFloat32(this.writeOffset, value as unknown as number, true);
+    this.writeOffset += 4;
   }
-  writeInt(offset: number, value: number) {
-    this.int32Buffer[offset >> 2] = value;
+  write_float2(offset: number, value: float2) {
+    this.write_float(0, value.x);
+    this.write_float(0, value.y);
+  }
+  write_float3(offset: number, value: float3) {
+    this.write_float(0, value.x);
+    this.write_float(0, value.y);
+    this.write_float(0, value.z);
+  }
+  write_float4(offset: number, value: float4) {
+    this.write_float(0, value.x);
+    this.write_float(0, value.y);
+    this.write_float(0, value.z);
+    this.write_float(0, value.w);
+  }
+  write_int(offset: number, value: int) {
+    this.dataView.setInt32(this.writeOffset, value as unknown as number, true);
+    this.writeOffset += 4;
   }
   getBuffer() {
     return this.arrayBuffer;
@@ -698,7 +712,7 @@ export class MTLInternals {
       const code = await this.shaderCodeProvider.promise;
 
       const shaderModule = device?.createShaderModule({
-        code: code + WGSL_LIB_CODE,
+        code: WGSL_LIB_PREAMBLE_CODE + code + WGSL_LIB_CODE,
       });
       const compilationInfo = await shaderModule?.getCompilationInfo();
       if ((compilationInfo?.messages.length ?? 0) > 0) {
@@ -1339,7 +1353,7 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
     });
     encoder.setBindGroup(0, vertexBindGroup);
     encoder.setBindGroup(1, fragmentBindGroup);
-    encoder.setBindGroup(2, internals.createDebugInOutsBindGroup(renderPipeline.getBindGroupLayout(2)));
+    // encoder.setBindGroup(2, internals.createDebugInOutsBindGroup(renderPipeline.getBindGroupLayout(2)));
     encoder.draw(count);
   });
 }

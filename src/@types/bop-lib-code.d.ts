@@ -346,7 +346,7 @@ interface GpuStatic {
   renderElements<TVertex, TSurface, TExtraVertexShaderArgs extends VarArgs, TExtraFragmentShaderArgs extends VarArgs>(
       count: int,
       vertexShader: (vertex: TVertex, threadId: ThreadId1d, ...args: [...TExtraVertexShaderArgs]) => TSurface,
-      fragmentShader: (surface: TSurface, threadId: ThreadId1d, ...args: [...TExtraFragmentShaderArgs]) => float4,
+      fragmentShader: (surface: TSurface, ...args: [...TExtraFragmentShaderArgs]) => float4,
       options?: { blendMode?: int, writeTarget?: Texture },
   ): CompiledRenderPipeline<TVertex, TExtraVertexShaderArgs, TExtraFragmentShaderArgs>;
 }

@@ -4,7 +4,7 @@ import { BapVisitor } from "../bap-visitor";
 import { BapSubtreeGenerator, BapGenerateContext, BapSubtreeValue, BapTypeSpec, BapFields } from '../bap-value';
 import { BapRootContextMixin } from '../bap-root-context-mixin';
 import { BopIdentifierPrefix } from '../bop-data';
-import { CodeBinaryOperator, CodeExpressionWriter, CodeNamedToken, CodeScopeType, CodeStatementWriter, CodeTypeSpec, CodeVariable } from '../code-writer';
+import { CodeAttributeKey, CodeBinaryOperator, CodeExpressionWriter, CodeNamedToken, CodeScopeType, CodeStatementWriter, CodeTypeSpec, CodeVariable } from '../code-writer';
 import { getNodeLabel } from '../ts-helpers';
 import { BapPrototypeMember, BapPrototypeScope, BapScope } from '../bap-scope';
 import { BapPropertyAccessExpressionVisitor } from './property-access-expression';
@@ -168,15 +168,29 @@ export class BapCallExpressionVisitor extends BapVisitor {
 
 
 
-class BufferFiller {
+export class BufferFiller extends BapRootContextMixin {
   gpuVar: CodeVariable = null as any;
   baseOffsetVar?: CodeVariable;
 
   constructor(readonly context: BapGenerateContext, readonly cpuVar: CodeVariable) {
+    super(context.scope.rootContext);
   }
 
   writeCpu(copyAsType: BapTypeSpec, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
-    return this.writeCpuWrite(copyAsType.codeTypeSpec, byteOffset, body);
+    if (!this.verifyNotNulllike(copyAsType.libType, `Cannot marshal type ${copyAsType.debugName}.`)) {
+      return body.writeExpressionStatement().expr;
+    }
+    const callExpr = body.writeExpressionStatement().expr.writeMethodCall(this.context.globalWriter.makeInternalToken('write_' + copyAsType.libType.identifier));
+    callExpr.source.writeVariableReference(this.cpuVar);
+    if (this.baseOffsetVar) {
+      const addOp = callExpr.addArg().writeBinaryOperation(CodeBinaryOperator.Add);
+      addOp.lhs.writeVariableReference(this.baseOffsetVar);
+      addOp.rhs.writeLiteralInt(byteOffset);
+    } else {
+      callExpr.addArg().writeLiteralInt(byteOffset);
+    }
+    return callExpr.addArg();
+    // return this.writeCpuWrite(copyAsType.codeTypeSpec, byteOffset, body);
     // if (type === 'float') {
     //   return this.writeCpuWriteFloat(byteOffset, body);
     // } else {
@@ -190,18 +204,18 @@ class BufferFiller {
   //   return this.writeCpuWrite(this.context.globalWriter.makeInternalToken('writeInt'), byteOffset, body);
   // }
 
-  private writeCpuWrite(writeMethod: CodeTypeSpec, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
-    const callExpr = body.writeExpressionStatement().expr.writeMethodCall(writeMethod.asStruct!);
-    callExpr.source.writeVariableReference(this.cpuVar);
-    if (this.baseOffsetVar) {
-      const addOp = callExpr.addArg().writeBinaryOperation(CodeBinaryOperator.Add);
-      addOp.lhs.writeVariableReference(this.baseOffsetVar);
-      addOp.rhs.writeLiteralInt(byteOffset);
-    } else {
-      callExpr.addArg().writeLiteralInt(byteOffset);
-    }
-    return callExpr.addArg();
-  }
+  // private writeCpuWrite(writeMethod: CodeTypeSpec, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
+  //   const callExpr = body.writeExpressionStatement().expr.writeMethodCall(writeMethod.asStruct!);
+  //   callExpr.source.writeVariableReference(this.cpuVar);
+  //   if (this.baseOffsetVar) {
+  //     const addOp = callExpr.addArg().writeBinaryOperation(CodeBinaryOperator.Add);
+  //     addOp.lhs.writeVariableReference(this.baseOffsetVar);
+  //     addOp.rhs.writeLiteralInt(byteOffset);
+  //   } else {
+  //     callExpr.addArg().writeLiteralInt(byteOffset);
+  //   }
+  //   return callExpr.addArg();
+  // }
   // private writeCpuWrite(writeMethod: CodeNamedToken, byteOffset: number, body: CodeStatementWriter): CodeExpressionWriter {
   //   const callExpr = body.writeExpressionStatement().expr.writeMethodCall(writeMethod);
   //   callExpr.source.writeVariableReference(this.cpuVar);
@@ -264,7 +278,8 @@ export function resolveBapFields(type: BapTypeSpec, context: BapGenerateContext)
 }
 
 
-export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType: BapTypeSpec, visitedSet?: Set<BapTypeSpec>): GpuBindings {
+export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, bopType: BapTypeSpec, options?: { bindingLocation: CodeAttributeKey }, visitedSet?: Set<BapTypeSpec>): GpuBindings {
+  const bindingLocation = options?.bindingLocation ?? CodeAttributeKey.GpuBindLocation;
   const bopProcessor = this;
   const writer = context.globalWriter;
   const basics = this.types.basic(context);
@@ -333,7 +348,7 @@ export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, b
       } else if (field.type.prototypeScope.arrayOfType) {
         const arrayOfType = field.type.prototypeScope.arrayOfType;
         // console.log(arrayOfType);
-        const elementBindings = makeGpuBindings.bind(this)(context, arrayOfType, thisVisitedSet);
+        const elementBindings = makeGpuBindings.bind(this)(context, arrayOfType, options, thisVisitedSet);
         // console.log(elementBindings);
         const elementBinding = elementBindings.bindings.find(b => b.type === 'fixed');
         if (elementBindings.bindings.length !== 1 || elementBinding?.type !== 'fixed') {
@@ -369,7 +384,9 @@ export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, b
 
   const bindings: GpuBinding[] = [];
   if (collectedCopyFields.length > 0) {
-    const byteLength = collectedCopyFields.length * 4;
+    let byteLengthAcc = 0;
+    collectedCopyFields.forEach(f => byteLengthAcc += f.copyAsType.libType?.marshalSize ?? 4);
+    const byteLength = byteLengthAcc;
 
     const marshalStructIdentifier = writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${bopType.debugName}_gpuMarshal`);
     const marshalStructWriter = writer.global.writeStruct(marshalStructIdentifier);
@@ -386,7 +403,7 @@ export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, b
       // const rawBopVar = marshalStructBlock.mapIdentifier(`${fieldIndex}_${nameHint}`, bopType.storageType, bopType);
       const rawField = marshalStructScope.allocateVariableIdentifier(bopType.codeTypeSpec, BopIdentifierPrefix.Field, nameHint);
       // rawBopVar.result = rawField;
-      marshalStructWriter.body.writeField(rawField.identifierToken, bopType.codeTypeSpec);
+      marshalStructWriter.body.writeField(rawField.identifierToken, bopType.codeTypeSpec, { attribs: [ { key: bindingLocation, intValue: fieldIndex } ] });
       unmarshalFields.push({ marshaledVar: rawField, type: bopType, path: field.path });
       field.marshalStructField = rawField;
       fieldIndex++;
@@ -432,13 +449,18 @@ export function makeGpuBindings(this: BapVisitor, context: BapGenerateContext, b
             const leafWriter = leafValue?.writeIntoExpression?.(body);
             const readExprLeaf = bufferFiller.writeCpu(field.copyAsType, offset, body);
             leafWriter?.(readExprLeaf);
-            offset += 4;
+            offset += field.copyAsType.libType?.marshalSize ?? 4;
           }
         });
       },
       unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
         const rootScope = intoContext;
         for (const field of unmarshalFields) {
+          const proxyVar = body.scope.allocateVariableIdentifier(field.type.codeTypeSpec, BopIdentifierPrefix.Local, field.path.map(p => p.identifier).join('_'));
+          body.writeVariableDeclaration(proxyVar)
+              .initializer.writeExpression().writePropertyAccess(field.marshaledVar.identifierToken)
+              .source.writeVariableReference(dataVar);
+
           let childScope = rootScope;
           let leafVar;
           for (let i = 0; i < field.path.length; ++i) {
@@ -727,8 +749,10 @@ export function bopRenderElementsCall(
           // Emit a wrapper GPU fragment function.
 
 
-          const vertexFuncIdentifier = instanceScope.allocateVariableIdentifier(basics.MTLRenderPipelineDescriptor.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_vert`).identifierToken;
-          const fragmentFuncIdentifier = instanceScope.allocateVariableIdentifier(basics.MTLRenderPipelineDescriptor.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_frag`).identifierToken;
+          const vertexFuncIdentifier = vertexKernel.token;
+          const fragmentFuncIdentifier = fragmentKernel.token;
+          // const vertexFuncIdentifier = instanceScope.allocateVariableIdentifier(basics.MTLRenderPipelineDescriptor.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_vert`).identifierToken;
+          // const fragmentFuncIdentifier = instanceScope.allocateVariableIdentifier(basics.MTLRenderPipelineDescriptor.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_frag`).identifierToken;
 
 
           // Emit pipeline setup code, and store the pipeline in globals.
@@ -1039,6 +1063,7 @@ export function bopRenderElementsCall(
             const fragmentOptionsVar = allocTmpOut(fragmentOptionsValue?.typeSpec!);
             const fragmentOptionsVarDecl = blockWriter.writeVariableDeclaration(fragmentOptionsVar);
             vertexOptionsWriter?.(vertexOptionsVarDecl.initializer.writeExpression());
+            fragmentOptionsWriter?.(fragmentOptionsVarDecl.initializer.writeExpression());
             bindBindings(vertexKernel.bindings, vertexOptionsVar, 'Vertex');
             bindBindings(fragmentKernel.bindings, fragmentOptionsVar, 'Fragment');
             // {

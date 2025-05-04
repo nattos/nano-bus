@@ -614,10 +614,19 @@ export class BapLibLoader extends BapRootContextMixin {
       return { identifier: t, type: typeSpec };
     });
 
+    let marshalSize: number|undefined = undefined;
     let isArrayOf: BapTypeSpec|undefined;
     // HACK!!!
     if (type.name === 'Array' && typeArgPairs.length === 1) {
       isArrayOf = typeArgPairs[0].type;
+    } else if (type.name === 'float') {
+      marshalSize = 4;
+    } else if (type.name === 'float2') {
+      marshalSize = 4 * 2;
+    } else if (type.name === 'float3') {
+      marshalSize = 4 * 3;
+    } else if (type.name === 'float4') {
+      marshalSize = 4 * 4;
     }
 
     const prototypeScope = new BapPrototypeScope({ arrayOfType: isArrayOf });// context.rootContext.withChildScope();
@@ -653,6 +662,10 @@ export class BapLibLoader extends BapRootContextMixin {
       codeTypeSpec: CodeTypeSpec.fromStruct(typedefIdentifier),
       isShadow: false,
       debugName: shortName,
+      libType: {
+        identifier: type.name,
+        marshalSize: marshalSize,
+      },
     };
     // const newType = host.createInternalType({
     //   identifier: type.name,

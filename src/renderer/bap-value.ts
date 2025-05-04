@@ -1,5 +1,5 @@
 import { BapChildScopeOptions, BapPrototypeScope, BapScope, BapThisSymbol } from "./bap-scope";
-import { BapVisitorRootContext } from "./bap-visitor";
+import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
 import { GpuBindings } from "./baps/call-expression";
 import { BopIdentifierPrefix } from "./bop-data";
 import { CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator, CodeWriter, CodeTypeSpec, CodeScope, CodeStructWriter, CodeVariable, CodeScopeType, CodeNamedToken } from "./code-writer";
@@ -132,6 +132,13 @@ export interface BapTypeSpec {
   codeTypeSpec: CodeTypeSpec;
   isShadow: boolean;
   debugName: string;
+  libType?: {
+    identifier: string;
+    marshalSize?: number;
+  };
+  marshal?: {
+    ensureMarshalable(fromVisitor: BapVisitor): void;
+  }
 }
 
 export type BapFields = Array<{ type: BapTypeSpec; identifier: string; }>;

@@ -2,11 +2,12 @@ import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
 import { BapFields, BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec, BapWriteAsStatementFunc, BapWriteIntoExpressionFunc } from "./bap-value";
 import { getNodeLabel } from "./ts-helpers";
-import { CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
+import { CodeBinaryOperator, CodeExpressionWriter, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeVariableGroup, CodeWriter } from './code-writer';
 import { BopIdentifierPrefix } from './bop-data';
 import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapRootContextMixin } from './bap-root-context-mixin';
-import { BapVisitorRootContext } from './bap-visitor';
+import { BapVisitor, BapVisitorRootContext } from './bap-visitor';
+import { BufferFiller, GpuFixedBinding, makeGpuBindings, resolveBapFields } from './baps/call-expression';
 
 // import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType, BopFunctionConcreteImplDetail, BopFunctionOf } from './bop-type';
 // import { BopBlock, BopIdentifierPrefix, BopGenericFunction, BopPropertyAccessor, BopVariable } from './bop-data';
@@ -32,6 +33,10 @@ export class BapTypes extends BapRootContextMixin {
         codeTypeSpec: CodeTypeSpec.fromPrimitive(primitiveType),
         isShadow: false,
         debugName: primitiveType,
+        libType: {
+          identifier: primitiveType,
+          marshalSize: 4,
+        },
       };
     };
     this.primitives = {
@@ -56,6 +61,9 @@ export class BapTypes extends BapRootContextMixin {
           codeTypeSpec: CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken(identifier)),
           isShadow: false,
           debugName: identifier,
+          libType: {
+            identifier: identifier,
+          },
         };
       };
       const foundTypes = {
@@ -64,6 +72,7 @@ export class BapTypes extends BapRootContextMixin {
         float3: resolveBasicType('float3'),
         float4: resolveBasicType('float4'),
         int: resolveBasicType('int'),
+        uint: resolveBasicType('uint'),
 
         Texture: resolveBasicType('Texture'),
         MTLDevice: resolveInternalType('MTLDevice'),
@@ -111,13 +120,50 @@ export class BapTypes extends BapRootContextMixin {
     let tsType: ts.Type;
     let maybeNode = nodeOrType as ts.Node;
     let maybeType = nodeOrType as ts.Type;
+    let fieldTypeOverrides: (() => Map<string, BapTypeGenerator>)|undefined;
+    let fieldInitOverrides: (() => Map<string, ts.ObjectLiteralExpression>)|undefined;
     if (maybeNode.kind) {
       tsType = this.tc.getTypeAtLocation(maybeNode);
+      if (ts.isObjectLiteralExpression(maybeNode)) {
+        const properties = maybeNode.properties;
+        fieldTypeOverrides = utils.lazy(() => {
+          const map = new Map<string, BapTypeGenerator>();
+          for (const p of properties) {
+            if (ts.isPropertyAssignment(p)) {
+              const field = p.name.getText();
+              if (ts.isLiteralExpression(p.initializer) && p.initializer.kind === ts.SyntaxKind.NumericLiteral) {
+                // BAD!!!
+                const asInt = !p.initializer.getText(this.sourceRoot).includes('.');
+                map.set(field, {
+                  generate: (context) => {
+                    const basics = this.basic(context);
+                    return asInt ? basics.int : basics.float;
+                  }
+                })
+              }
+            }
+          }
+          return map;
+        });
+        fieldInitOverrides = utils.lazy(() => {
+          const map = new Map<string, ts.ObjectLiteralExpression>();
+          for (const p of properties) {
+            if (ts.isPropertyAssignment(p)) {
+              const field = p.name.getText();
+              if (ts.isObjectLiteralExpression(p.initializer)) {
+                map.set(field, p.initializer);
+              }
+            }
+          }
+          return map;
+        });
+      }
     } else {
       tsType = maybeType;
     }
     return {
       generate: (context) => {
+        const basics = this.basic(context);
         const isObject = (tsType.flags & ts.TypeFlags.Object) === ts.TypeFlags.Object;
         const objectFlags = isObject ? (tsType as ts.ObjectType).objectFlags : ts.ObjectFlags.None;
         const isReference = (objectFlags & ts.ObjectFlags.Reference) === ts.ObjectFlags.Reference;
@@ -178,6 +224,8 @@ export class BapTypes extends BapRootContextMixin {
           found = this.primitiveTypeSpec(CodePrimitiveType.Bool);
         } else if ((tsType.flags & ts.TypeFlags.Undefined) === ts.TypeFlags.Undefined) {
           // found = this.primitiveType(CodePrimitiveType.Undefined);
+        } else if ((tsType.flags & ts.TypeFlags.Void) === ts.TypeFlags.Void) {
+          found = this.primitiveTypeSpec(CodePrimitiveType.Void);
         }
         if (found) {
           return found;
@@ -291,12 +339,16 @@ export class BapTypes extends BapRootContextMixin {
               continue;
             }
             let propertySymbolType = this.tc.getTypeOfSymbol(propertySymbol);
-            let propertyType;
+            let propertyType: BapTypeSpec|undefined;
             // if (propertySymbolType.isTypeParameter()) {
             //   propertyType = resolveInnerTypeRef(propertySymbolType);
             // }
             // propertyType ??= this.type(propertySymbolType, { willCoerceTo: options?.willCoerceFieldsTo?.get(propertyName) });
-            propertyType ??= this.type(propertySymbolType)?.generate(context) ?? this.errorType;
+            if (propertyName === 'theta') {
+              console.log(propertyName);
+            }
+            propertyType ??= fieldTypeOverrides?.().get(propertyName)?.generate(context);
+            propertyType ??= this.type(fieldInitOverrides?.()?.get(propertyName) ?? propertySymbolType)?.generate(context) ?? this.errorType;
             // const propertyType = this.resolveType(this.tc.getTypeAtLocation(propertyDecl));
             fields.push({ type: propertyType, identifier: propertyName });
           }
@@ -367,39 +419,78 @@ export class BapTypes extends BapRootContextMixin {
               fieldIdentifierMap.set(property.identifier, { fieldVar: fieldIdentifier, fieldType: typeSpec });
             }
           }
-          {
-            const structWriterOuter = context.globalWriter.global.writeStruct(identifier.identifierToken);
-            // structWriterOuter.touchedByProxy = {
-            //   get touchedByCpu() { return structOf.touchedByCpu; },
-            //   get touchedByGpu() { return structOf.touchedByGpu; },
-            // };
-            const structWriter = structWriterOuter.body;
+          const structWriterOuter = context.globalWriter.global.writeStruct(identifier.identifierToken);
+          // structWriterOuter.touchedByProxy = {
+          //   get touchedByCpu() { return structOf.touchedByCpu; },
+          //   get touchedByGpu() { return structOf.touchedByGpu; },
+          // };
+          const structWriter = structWriterOuter.body;
 
-            for (const [identifier, property] of fieldIdentifierMap) {
-              structWriter.writeField(property.fieldVar.identifierToken, property.fieldVar.typeSpec);
-            }
-            // structWriter.writeStaticConstant(this.writer.makeInternalToken('marshalBytesInto'), CodeTypeSpec.functionType, () => {
-            //   return structOf.marshalFunc;
-            // });
-            // structWriter.writeStaticConstant(this.writer.makeInternalToken('marshalByteStride'), CodeTypeSpec.functionType, () => {
-            //   if (structOf.marshalLength === undefined) {
-            //     return;
-            //   }
-            //   const value = structOf.marshalLength;
-            //   return (expr: CodeExpressionWriter) => {
-            //     expr.writeLiteralInt(value);
-            //   };
-            // });
-
-            // for (const methodDecl of methodDecls) {
-            //   methodFuncs.push(() => {
-            //     const methodVar = this.declareFunction(methodDecl, newType, this.globalBlock, thisBlock, typeArgs);
-            //     if (!methodVar) {
-            //       return;
-            //     }
-            //   });
-            // }
+          for (const [identifier, property] of fieldIdentifierMap) {
+            structWriter.writeField(property.fieldVar.identifierToken, property.fieldVar.typeSpec);
           }
+
+
+          const marshalFuncVar = context.globalWriter.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, `marshal_${shortName}`);
+          let marshalByteSize = 0;
+          let ensuredMarshalable = false;
+          const ensureMarshalable = (bapVisitor: BapVisitor) => {
+            if (ensuredMarshalable) {
+              return;
+            }
+            ensuredMarshalable = true;
+            const fields = resolveBapFields(newType, context);
+            for (const field of fields) {
+              field.type?.marshal?.ensureMarshalable(bapVisitor);
+            }
+            const bindings = makeGpuBindings.bind(bapVisitor)(context, newType);
+            const elementBinding = bindings.bindings.find(b => b.type === 'fixed') as GpuFixedBinding|undefined;
+            if (!elementBinding) {
+              return;
+            }
+
+            const marshalFunc = context.globalWriter.global.writeFunction(marshalFuncVar.identifierToken);
+            marshalFunc.touchedByCpu = true;
+
+            // binding.userType.structOf.marshalFunc = marshalFuncVar;
+            // binding.userType.structOf.marshalLength = binding.elementBinding.byteLength;
+            const codeTypeSpec = CodeTypeSpec.fromStruct(identifier.identifierToken);
+            const funcScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Function);
+            const valueVar = funcScope.allocateVariableIdentifier(codeTypeSpec, BopIdentifierPrefix.Local, 'value');
+            marshalFunc.addParam(valueVar.typeSpec, valueVar.identifierToken);
+            const bufferFillerVar = funcScope.allocateVariableIdentifier(basics.BufferFiller.codeTypeSpec, BopIdentifierPrefix.Local, 'bufferFiller');
+            marshalFunc.addParam(bufferFillerVar.typeSpec, bufferFillerVar.identifierToken);
+            const indexVar = funcScope.allocateVariableIdentifier(basics.int.codeTypeSpec, BopIdentifierPrefix.Local, 'index');
+            marshalFunc.addParam(indexVar.typeSpec, indexVar.identifierToken);
+            const funcBody = marshalFunc.body;
+
+            const bufferFiller = new BufferFiller(context, bufferFillerVar);
+
+            const baseOffsetVar = funcBody.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'baseOffset');
+            const baseOffset = funcBody.writeVariableDeclaration(baseOffsetVar).initializer.writeExpression().writeBinaryOperation(CodeBinaryOperator.Multiply);
+            baseOffset.lhs.writeVariableReference(indexVar);
+            baseOffset.rhs.writeLiteralInt(elementBinding.byteLength);
+            bufferFiller.baseOffsetVar = baseOffsetVar;
+            elementBinding.marshal(valueVar, bufferFiller, funcBody);
+            marshalByteSize = elementBinding.byteLength;
+          };
+          structWriter.writeStaticConstant(context.globalWriter.makeInternalToken('marshalBytesInto'), CodeTypeSpec.functionType, () => {
+            return marshalFuncVar;
+          });
+          structWriter.writeStaticConstant(context.globalWriter.makeInternalToken('marshalByteStride'), CodeTypeSpec.functionType, () => {
+            return (expr: CodeExpressionWriter) => {
+              expr.writeLiteralInt(marshalByteSize);
+            };
+          });
+
+          // for (const methodDecl of methodDecls) {
+          //   methodFuncs.push(() => {
+          //     const methodVar = this.declareFunction(methodDecl, newType, this.globalBlock, thisBlock, typeArgs);
+          //     if (!methodVar) {
+          //       return;
+          //     }
+          //   });
+          // }
 
           // let unionOf: BopTypeUnion|undefined;
           // if (casesIdentifierMap && caseVariableIdentifier) {
@@ -529,6 +620,9 @@ export class BapTypes extends BapRootContextMixin {
             codeTypeSpec: CodeTypeSpec.fromStruct(identifier.identifierToken),
             isShadow: false,
             debugName: shortName,
+            marshal: {
+              ensureMarshalable
+            },
           };
           this.typesByTsTypeKey.set(tsType, { generate: (context) => newType });
           this.typesByStructureKey.set(structureKey, newType);

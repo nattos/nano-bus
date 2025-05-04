@@ -24,12 +24,14 @@ const WEBGPU_GPU_RENAMES: Record<string, string> = {
   'BopLib::int2': 'vec2i',
   'BopLib::int3': 'vec3i',
   'BopLib::int4': 'vec4i',
+  'BopLib::uint': 'u32',
   'BopLib::float': 'f32',
   'BopLib::float2': 'vec2f',
   'BopLib::float3': 'vec3f',
   'BopLib::float4': 'vec4f',
   'BopLib::Texture': 'texture_2d<f32>',
   'Array': 'array',
+  'BopLib::Array': 'array',
 };
 
 const WEBGPU_CPU_RENAMES: Record<string, string> = {
@@ -803,6 +805,7 @@ export class CodeStructBodyWriter implements CodeWriterFragment {
 
 export class CodeStatementWriter implements CodeWriterFragment {
   private statementWriterFuncs: CodeWriterFunc[] = [];
+  private didEarlyExit = false;
 
   get writerFunc(): CodeWriterFunc {
     return (stream, context) => {
@@ -818,6 +821,9 @@ export class CodeStatementWriter implements CodeWriterFragment {
   private pushWriterFunc(writerFunc: CodeWriterFunc) {
     if (this.options?.singleStatement && this.statementWriterFuncs.length > 0) {
       throw new Error('Statement is already defined.');
+    }
+    if (this.didEarlyExit) {
+      return;
     }
     this.statementWriterFuncs.push(writerFunc);
   }
@@ -1046,6 +1052,7 @@ export class CodeStatementWriter implements CodeWriterFragment {
       }
       this.writeFinalizeLine(stream, context);
     });
+    this.didEarlyExit = true;
     return result;
   }
   writeBreakStatement() {
@@ -1053,12 +1060,14 @@ export class CodeStatementWriter implements CodeWriterFragment {
       stream.writeToken('break');
       this.writeFinalizeLine(stream, context);
     });
+    this.didEarlyExit = true;
   }
   writeContinueStatement() {
     this.pushWriterFunc((stream, context) => {
       stream.writeToken('continue');
       this.writeFinalizeLine(stream, context);
     });
+    this.didEarlyExit = true;
   }
 }
 
