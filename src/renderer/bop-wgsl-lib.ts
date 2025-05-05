@@ -1,7 +1,6 @@
 
 export const WGSL_LIB_PREAMBLE_CODE = `
 diagnostic(off, derivative_uniformity);
-alias CompileError = i32;
 `;
 export const WGSL_LIB_CODE = `
 

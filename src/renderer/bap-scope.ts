@@ -1,6 +1,6 @@
 import { BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec } from "./bap-value";
 import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
-import { CodeStatementWriter, CodeBinaryOperator, CodeNamedToken, CodePrimitiveType } from "./code-writer";
+import { CodeStatementWriter, CodeBinaryOperator, CodeNamedToken, CodePrimitiveType, getTrace } from "./code-writer";
 
 export type BapIdentifier = string|BapSpecialSymbol;
 export type BapSpecialSymbol = typeof BapThisSymbol|typeof BapReturnValueSymbol|typeof BapBreakBreakFlagSymbol;
@@ -97,6 +97,7 @@ export class BapScope {
   readonly referencedInChildren = new Set<BapIdentifierInstance>();
   private readonly children: BapScope[] = [];
   bindContext?: BapGenerateContext;
+  readonly trace = getTrace();
 
   constructor(
     readonly rootContext: BapVisitorRootContext,
@@ -171,7 +172,7 @@ export class BapScope {
     }
   }
 
-  resolve(identifier: BapIdentifier, options?: { isTypeLookup?: boolean; }): BapSubtreeValue|undefined {
+  resolve(identifier: BapIdentifier, options?: { isTypeLookup?: boolean; allowTypeParameters?: boolean; }): BapSubtreeValue|undefined {
     let scope: BapScope|undefined = this;
     let refScopes: BapScope[] = [];
     let value = undefined;
@@ -188,7 +189,7 @@ export class BapScope {
       const thisValue = this.bindScope?.thisValue;
       if (!options?.isTypeLookup && thisValue) {
         if (thisValue?.type === 'type' && this.bindContext) {
-          const thisTypeSpec = thisValue.typeGen.generate(this.bindContext);
+          const thisTypeSpec = thisValue.typeGen.generate(this.bindContext, { allowTypeParameters: true });
           prototypeScope = thisTypeSpec?.staticScope;
         } else {
           prototypeScope = thisValue?.typeSpec?.prototypeScope;

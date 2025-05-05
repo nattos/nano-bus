@@ -69,6 +69,7 @@ export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitor
   BapVisitor.mapNodeType(ts.SyntaxKind.ContinueStatement, BapContinueStatementVisitor);
 
   const context = BapGenerateContext.root({context: rootContext, globalWriter: codeWriter, isGpu: true});
+  rootContext.types.debug = { debugContext: context };
   const libTypes = new BapLibLoader(rootContext).loadBopLib();
   for (const libType of libTypes) {
     context.scope.declare(libType.identifier, {

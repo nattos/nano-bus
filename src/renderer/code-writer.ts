@@ -1,6 +1,7 @@
 import * as utils from '../utils';
 
 const TRACE = true;
+const TRACE_IN_CODE = false;
 const DEBUG = true;
 const STRICT = false;
 
@@ -545,9 +546,24 @@ export class CodeGlobalWriter implements CodeWriterFragment {
     return result;
   }
 
-  writeTypedef(identifier: CodeNamedToken, type: CodeTypeSpec): void {
+  writeTypedef(identifier: CodeNamedToken, type: CodeTypeSpec): CodeTypedefWriter {
+    const result: CodeTypedefWriter = {
+      touchedByGpu: true,
+      touchedByCpu: true,
+      touchedByProxy: undefined,
+    };
+    const trace = getTrace();
     this.typeIdentifiers.push(identifier);
     this.typedefWriters.push((stream, context) => {
+      if (context.isGpu) {
+        if (!(result.touchedByProxy?.touchedByGpu ?? result.touchedByGpu)) {
+          return;
+        }
+      } else {
+        if (!(result.touchedByProxy?.touchedByCpu ?? result.touchedByCpu)) {
+          return;
+        }
+      }
       if (context.platform === CodeWriterPlatform.WebGPU && !context.isGpu) {
         // JavaScript fun.
         stream.writeToken('const');
@@ -558,7 +574,6 @@ export class CodeGlobalWriter implements CodeWriterFragment {
         stream.writeWhitespace();
         stream.writeTypeSpec(type);
         stream.writeToken(';');
-        stream.flushLine();
       } else if (context.platform === CodeWriterPlatform.WebGPU && context.isGpu) {
         stream.writeToken('alias');
         stream.writeWhitespace();
@@ -568,7 +583,6 @@ export class CodeGlobalWriter implements CodeWriterFragment {
         stream.writeWhitespace();
         stream.writeTypeSpec(type);
         stream.writeToken(';');
-        stream.flushLine();
       } else {
         stream.writeToken('typedef');
         stream.writeWhitespace();
@@ -576,9 +590,14 @@ export class CodeGlobalWriter implements CodeWriterFragment {
         stream.writeWhitespace();
         stream.writeToken(identifier);
         stream.writeToken(';');
-        stream.flushLine();
       }
+      if (TRACE_IN_CODE && trace) {
+        stream.writeWhitespacePadding();
+        stream.writeBlockComment(trace);
+      }
+      stream.flushLine();
     });
+    return result;
   }
 }
 
@@ -591,6 +610,15 @@ export interface CodeStructWriter {
     get touchedByCpu(): boolean;
   };
   isInternalOnly: boolean;
+}
+
+export interface CodeTypedefWriter {
+  touchedByGpu: boolean;
+  touchedByCpu: boolean;
+  touchedByProxy?: {
+    get touchedByGpu(): boolean;
+    get touchedByCpu(): boolean;
+  };
 }
 
 export enum CodeAttributeKey {
@@ -1130,6 +1158,14 @@ export class CodeExpressionWriterBase implements CodeWriterFragment {
         return (stream, context) => { stream.writeToken('***error***'); };
       }
     }
+    if (TRACE_IN_CODE && this.trace) {
+      const inner = this.writerFuncField;
+      return (stream, context) => {
+        inner(stream, context);
+        stream.writeWhitespacePadding();
+        stream.writeBlockComment(this.trace);
+      };
+    }
     return this.writerFuncField;
   }
 
@@ -1644,6 +1680,7 @@ export class CodeTextStream {
   private line = '';
   private indentStr?: string;
   private lineNeedsPadding = false;
+  private blockCommentLevel = 0;
 
   constructor(
     public readonly context: CodeWriterContext,
@@ -1685,6 +1722,29 @@ export class CodeTextStream {
       this.lineNeedsPadding = str.charAt(str.length - 1).match(/[\[{(]/g) == null;
     }
   }
+  writeBlockCommentBegin() {
+    if (this.blockCommentLevel > 0) {
+      this.writeToken('/-');
+    } else {
+      this.writeToken('/*');
+    }
+    this.blockCommentLevel++;
+  }
+  writeBlockCommentEnd() {
+    this.blockCommentLevel--;
+    if (this.blockCommentLevel > 0) {
+      this.writeToken('-/');
+    } else {
+      this.writeToken('*/');
+    }
+  }
+  writeBlockComment(content: string) {
+    this.writeBlockCommentBegin();
+    this.writeWhitespace();
+    this.writeToken(content.replaceAll('/*', '/+').replaceAll('*/', '+/'));
+    this.writeWhitespace();
+    this.writeBlockCommentEnd();
+  }
   writeTypeSpec(typeSpec: CodeTypeSpec) {
     if (this.context.platform === CodeWriterPlatform.WebGPU && !this.context.isGpu) {
       // JavaScript fun.
@@ -1696,9 +1756,8 @@ export class CodeTextStream {
         this.writeToken(typeSpec.asStruct);
 
         if (DEBUG && typeSpec.typeArgs.length > 0) {
-          // TODO: This will break if there are templates in templates!
           this.writeWhitespacePadding();
-          this.writeToken('/*');
+          this.writeBlockCommentBegin();
           this.writeWhitespace();
           this.writeToken('<');
           for (let i = 0; i < typeSpec.typeArgs.length; ++i) {
@@ -1712,7 +1771,7 @@ export class CodeTextStream {
           }
           this.writeToken('>');
           this.writeWhitespace();
-          this.writeToken('*/');
+          this.writeBlockCommentEnd();
         }
       } else {
         throw new Error(`Type ${typeSpec} is undefined.`);
@@ -1807,7 +1866,7 @@ export class CodeTextStream {
   }
 }
 
-function getTrace(): string {
+export function getTrace(): string {
   if (!TRACE) {
     return '';
   }

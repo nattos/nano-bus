@@ -2,7 +2,7 @@ import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
 import { BapFields, BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec, BapWriteAsStatementFunc, BapWriteIntoExpressionFunc } from "./bap-value";
 import { getNodeLabel } from "./ts-helpers";
-import { CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
+import { CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter, getTrace } from './code-writer';
 import { BopIdentifierPrefix } from './bop-data';
 import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapTypes } from './bap-types';
@@ -30,6 +30,7 @@ interface VistorDecl {
 export class BapVisitor extends BapRootContextMixin {
   protected static currentParent?: BapVisitor;
   private static readonly nodeTypeMap = new Map<ts.SyntaxKind, Array<VistorDecl>>();
+  readonly trace = getTrace();
 
   constructor(rootContext?: BapVisitorRootContext) {
     let parentContext = rootContext ?? BapVisitor.currentParent?.rootContext;
@@ -76,6 +77,14 @@ export class BapVisitor extends BapRootContextMixin {
     }
     if (!this.verifyNotNulllike(child, `Unsupported syntax ${getNodeLabel(node)}`)) {
       return;
+    }
+    if (this.trace) {
+      child.debug = {
+        trace: this.trace,
+        get sourceCode() {
+          return node.getFullText();
+        },
+      };
     }
     return child;
   }

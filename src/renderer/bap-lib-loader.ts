@@ -323,9 +323,12 @@ export class BapLibLoader extends BapRootContextMixin {
       let instanceIndex = 0;
       const instanceMap = new Map<string, BapTypeSpec>();
       const typeGen: BapTypeGenerator = {
-        generate: (context) => {
+        generate: (context, options) => {
           const thisInstanceIndex = instanceIndex++;
-          return this.generateType(type, thisInstanceIndex, context, instanceMap);
+          return this.generateType(type, thisInstanceIndex, context, instanceMap, { allowTypeParameters: options?.allowTypeParameters });
+        },
+        debug: {
+          debugName: type.name,
         },
       };
       libTypeGens.push({ identifier: type.name, tsType: type.tsType, typeGen: typeGen });
@@ -333,7 +336,12 @@ export class BapLibLoader extends BapRootContextMixin {
       this.newBopTypeMap.set(type.name, {
         genericInstantiator: (context, typeArgs) => {
           const thisInstanceIndex = instanceIndex++;
-          return this.generateType(type, thisInstanceIndex, context, instanceMap);
+          const innerContext = context.withChildScope();
+          for (const [ name, arg ] of utils.zip(type.typeParameters, typeArgs)) {
+            const typeArgValue = arg.type;
+            innerContext.scope.declare(name, { type: 'type', isGenericTypeParameter: false, typeGen: { generate: () => typeArgValue, debug: { debugName: name, fixed: typeArgValue } } });
+          }
+          return this.generateType(type, thisInstanceIndex, innerContext, instanceMap);
         },
       });
 
@@ -598,7 +606,7 @@ export class BapLibLoader extends BapRootContextMixin {
   }
 
 
-  private generateType(type: TypeInfo, instanceIndex: number, context: BapGenerateContext, instanceMap: Map<string, BapTypeSpec>): BapTypeSpec {
+  private generateType(type: TypeInfo, instanceIndex: number, context: BapGenerateContext, instanceMap: Map<string, BapTypeSpec>, options?: { allowTypeParameters?: boolean }): BapTypeSpec {
     const codeWriter = context.globalWriter;
     const codeGlobalScope = codeWriter.global.scope;
 
@@ -606,7 +614,16 @@ export class BapLibLoader extends BapRootContextMixin {
     const typeArgPairs: BapFields = type.typeParameters.map(t => {
       const typeGen = context.scope.resolve(t, { isTypeLookup: true });
       let typeSpec;
-      if (typeGen?.type !== 'type') {
+      if (options?.allowTypeParameters && !typeGen) {
+        typeSpec = {
+          prototypeScope: this.types.errorType.prototypeScope,
+          staticScope: this.types.errorType.staticScope,
+          typeParameters: [],
+          codeTypeSpec: this.types.errorType.codeTypeSpec,
+          isShadow: false,
+          debugName: t
+        } satisfies BapTypeSpec;
+      } else if (typeGen?.type !== 'type') {
         typeSpec = this.types.errorType;
       } else {
         typeSpec = typeGen.typeGen.generate(context) ?? this.types.errorType;
@@ -649,9 +666,18 @@ export class BapLibLoader extends BapRootContextMixin {
 
     const typeArgSpecs = typeArgPairs.map(t => t.type);
     const typeArgCodeSpecs = typeArgSpecs.map(t => t.codeTypeSpec);
-    const typedefType = CodeTypeSpec.fromStruct(baseTypeToken).withTypeArgs(typeArgCodeSpecs);
+    let typedefType: CodeTypeSpec;
     const typedefIdentifier = codeGlobalScope.allocateIdentifier(BopIdentifierPrefix.Struct, instantiatedTypeName);
-    codeWriter.global.writeTypedef(typedefIdentifier, typedefType);
+    const isStaticAccess = options?.allowTypeParameters && typeArgSpecs.some(typeArg => typeArg?.codeTypeSpec.asPrimitive === CodePrimitiveType.CompileError);
+    if (isStaticAccess) {
+      typedefType = CodeTypeSpec.fromStruct(baseTypeToken);
+    } else {
+      typedefType = CodeTypeSpec.fromStruct(baseTypeToken).withTypeArgs(typeArgCodeSpecs);
+    }
+    const typedefWriter = codeWriter.global.writeTypedef(typedefIdentifier, typedefType);
+    if (isStaticAccess) {
+      typedefWriter.touchedByGpu = false;
+    }
     codeWriter.mapInternalToken(typedefIdentifier, instantiatedTypeName);
 
     const typeName = `BopLib::${type.name}`;
@@ -687,13 +713,13 @@ export class BapLibLoader extends BapRootContextMixin {
         {
           isField: false,
           token: typeParameterCodeIdentifier,
-          genType: { generate: (context: BapGenerateContext) => { return typeArg; } },
+          genType: { generate: (context: BapGenerateContext) => typeArg, debug: { debugName: typeParameter, fixed: typeArg } },
           gen: (bindScope) => ({
             generateRead: (context: BapGenerateContext): BapSubtreeValue => {
               return {
                 type: 'type',
                 isGenericTypeParameter: false,
-                typeGen: { generate: (context) => typeArg },
+                typeGen: { generate: (context) => typeArg, debug: { debugName: typeParameter, fixed: typeArg } },
               };
             },
           })
@@ -740,7 +766,7 @@ export class BapLibLoader extends BapRootContextMixin {
         {
           isField: true,
           token: fieldIdentifier,
-          genType: { generate: (context: BapGenerateContext) => { return fieldType; } },
+          genType: { generate: (context: BapGenerateContext) => fieldType, debug: { debugName: fieldIdentifier.nameHint, fixed: fieldType } },
           gen: (bindScope) => ({
             generateRead: (context: BapGenerateContext): BapSubtreeValue => {
               const thisValue = bindScope.resolve(BapThisSymbol);
@@ -792,7 +818,7 @@ export class BapLibLoader extends BapRootContextMixin {
           {
             isField: false,
             token: funcIdentifier.identifierToken,
-            genType: { generate: (context: BapGenerateContext) => { return this.types.primitiveTypeSpec(CodePrimitiveType.Function); } },
+            genType: { generate: (context: BapGenerateContext) => { return this.types.primitiveTypeSpec(CodePrimitiveType.Function); }, debug: { debugName: funcIdentifier.identifierToken.nameHint } },
             gen: (bindScope) => ({
               generateRead: (prepare) => {
                 const funcLiteral: BapFunctionLiteral = {
@@ -846,7 +872,7 @@ export class BapLibLoader extends BapRootContextMixin {
           {
             isField: false,
             token: funcIdentifier.identifierToken,
-            genType: { generate: (context: BapGenerateContext) => { return this.types.primitiveTypeSpec(CodePrimitiveType.Function); } },
+            genType: { generate: (context: BapGenerateContext) => { return this.types.primitiveTypeSpec(CodePrimitiveType.Function); }, debug: { debugName: funcIdentifier.identifierToken.nameHint } },
             gen: (bindScope) => ({
               generateRead: (prepare) => {
                 const funcLiteral: BapFunctionLiteral = {

@@ -7,6 +7,10 @@ import { CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator, CodeWrit
 export interface BapSubtreeGenerator {
   generateRead(context: BapGenerateContext, options?: BapGenerateOptions): BapSubtreeValue;
   generateWrite?(context: BapGenerateContext, value: BapSubtreeValue): BapWriteAsStatementFunc|undefined;
+  debug?: {
+    trace: string;
+    sourceCode: string;
+  };
 }
 
 export class BapGenerateContext {
@@ -64,6 +68,7 @@ export class BapGenerateCache {
 
 export interface BapGenerateOptions {
   willCoerceTo?: BapTypeSpec;
+  allowTypeParameters?: boolean;
 }
 
 // export interface BapSubtree {
@@ -122,7 +127,11 @@ export interface BapSubtreeValueBase {
 
 
 export interface BapTypeGenerator {
-  generate(context: BapGenerateContext): BapTypeSpec|undefined;
+  generate(context: BapGenerateContext, options?: BapGenerateOptions): BapTypeSpec|undefined;
+  debug?: {
+    fixed?: BapTypeSpec;
+    debugName?: string;
+  };
 }
 
 export interface BapTypeSpec {

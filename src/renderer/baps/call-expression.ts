@@ -26,7 +26,7 @@ export class BapCallExpressionVisitor extends BapVisitor {
     const typeArgData = (typeParameterNames && typeArgGens) ? utils.zip(typeParameterNames, typeArgGens) : undefined;
     return {
       generateRead: (context: BapGenerateContext) => {
-        let funcValue = funcGen?.generateRead(context);
+        let funcValue = funcGen?.generateRead(context, { allowTypeParameters: true });
         if (funcValue?.type === 'function') {
           const argValues = argGens.map(gen => gen?.generateRead(context));
           const typeArgValues = typeArgData?.map<BapSubtreeValue>(([ name, arg ]) => {

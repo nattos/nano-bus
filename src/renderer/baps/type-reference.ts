@@ -43,6 +43,9 @@ export class BapTypeReferenceVisitor extends BapVisitor {
               generate(context: BapGenerateContext): BapTypeSpec|undefined {
                 return innerTypeGen.generate(boundContext);
               },
+              debug: {
+                debugName: identifierName.toString(),
+              },
             },
           };
         }
