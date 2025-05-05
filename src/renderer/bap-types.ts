@@ -247,7 +247,7 @@ export class BapTypes extends BapRootContextMixin {
 
       const parentCodeScope = context.globalWriter.global.scope;
       // const parentBlock = this.globalBlock;
-      const shortName = this.stringifyType(tsType).slice(0, 24);
+      const shortName = this.stringifyType(tsType, { short: true }).slice(0, 24);
 
       // Create a new type.
       if (!this.check((tsType.flags & ts.TypeFlags.Any) !== ts.TypeFlags.Any, `Type ${utils.stringEmptyToNull(shortName) ?? 'any'} is disallowed.`)) {

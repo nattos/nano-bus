@@ -7,7 +7,6 @@ export class BapPropertyAccessExpressionVisitor extends BapVisitor {
   manual({ thisGen, identifierName }: { thisGen?: BapSubtreeGenerator; identifierName: BapIdentifier; }): BapSubtreeGenerator|undefined {
     return {
       generateRead: (context, options) => {
-        console.log('BapPropertyAccessExpressionVisitor', identifierName);
         const thisValue = thisGen?.generateRead(context);
         const thisContext = context.withChildScope({ bindScope: { thisValue: thisValue } });
         return thisContext.scope.resolve(identifierName, { allowTypeParameters: options?.allowTypeParameters }) ?? { type: 'error' };

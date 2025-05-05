@@ -2,7 +2,7 @@ import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
 import { BapFields, BapFunctionLiteral, BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeLiteral, BapTypeSpec, BapWriteAsStatementFunc, BapWriteIntoExpressionFunc } from "./bap-value";
 import { getNodeLabel } from "./ts-helpers";
-import { CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
+import { CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
 import { BopIdentifierPrefix } from './bop-data';
 import { BapConstructorSymbol, BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapRootContextMixin } from './bap-root-context-mixin';
@@ -611,6 +611,7 @@ export class BapLibLoader extends BapRootContextMixin {
     const codeGlobalScope = codeWriter.global.scope;
 
     const typeParameters = type.typeParameters;
+    const isGeneric = typeParameters.length > 0;
     const typeArgPairs: BapFields = type.typeParameters.map(t => {
       const typeGen = context.scope.resolve(t, { isTypeLookup: true });
       let typeSpec;
@@ -660,25 +661,33 @@ export class BapLibLoader extends BapRootContextMixin {
     const externBaseTypeName = `BopLib::${type.name}`;
     codeWriter.mapInternalToken(baseTypeToken, externBaseTypeName);
 
-    // TODO: Coalease copies!!!
-    // Create typedef.
-    const instantiatedTypeName = `BopLib_${type.name}_${instanceIndex}`;
-
     const typeArgSpecs = typeArgPairs.map(t => t.type);
     const typeArgCodeSpecs = typeArgSpecs.map(t => t.codeTypeSpec);
-    let typedefType: CodeTypeSpec;
-    const typedefIdentifier = codeGlobalScope.allocateIdentifier(BopIdentifierPrefix.Struct, instantiatedTypeName);
-    const isStaticAccess = options?.allowTypeParameters && typeArgSpecs.some(typeArg => typeArg?.codeTypeSpec.asPrimitive === CodePrimitiveType.CompileError);
-    if (isStaticAccess) {
-      typedefType = CodeTypeSpec.fromStruct(baseTypeToken);
+
+    // TODO: Coalease copies!!!
+    let instantiatedTypeName: string;
+    // Create typedef.
+    let typedefIdentifier: CodeNamedToken;
+    if (isGeneric) {
+      instantiatedTypeName = `BopLib_${type.name}_${instanceIndex}`;
+      typedefIdentifier = codeGlobalScope.allocateIdentifier(BopIdentifierPrefix.Struct, instantiatedTypeName);
+      const isStaticAccess = options?.allowTypeParameters && typeArgSpecs.some(typeArg => typeArg?.codeTypeSpec.asPrimitive === CodePrimitiveType.CompileError);
+
+      let typedefType: CodeTypeSpec;
+      if (isStaticAccess) {
+        typedefType = CodeTypeSpec.fromStruct(baseTypeToken);
+      } else {
+        typedefType = CodeTypeSpec.fromStruct(baseTypeToken).withTypeArgs(typeArgCodeSpecs);
+      }
+      const typedefWriter = codeWriter.global.writeTypedef(typedefIdentifier, typedefType);
+      if (isStaticAccess) {
+        typedefWriter.touchedByGpu = false;
+      }
+      codeWriter.mapInternalToken(typedefIdentifier, instantiatedTypeName);
     } else {
-      typedefType = CodeTypeSpec.fromStruct(baseTypeToken).withTypeArgs(typeArgCodeSpecs);
+      instantiatedTypeName = externBaseTypeName;
+      typedefIdentifier = baseTypeToken;
     }
-    const typedefWriter = codeWriter.global.writeTypedef(typedefIdentifier, typedefType);
-    if (isStaticAccess) {
-      typedefWriter.touchedByGpu = false;
-    }
-    codeWriter.mapInternalToken(typedefIdentifier, instantiatedTypeName);
 
     const typeName = `BopLib::${type.name}`;
     const newType: BapTypeSpec = {

@@ -87,7 +87,7 @@ export class BapRootContextMixin {
     return '???';
   }
 
-  protected stringifyType(type: ts.Type): string {
+  protected stringifyType(type: ts.Type, options?: { short?: boolean; }): string {
       // console.log(this.tc.typeToString(type));
       // console.log(this.tc.typeToString(this.tc.getWidenedType(type)));
       // console.log((this.tc as any).getElementTypeOfArrayType(type));
@@ -124,7 +124,11 @@ export class BapRootContextMixin {
           return `(${signature.getParameters().map(p => `${p.name}:${this.getSymbolType(p)}`).join(',')}) => ${this.stringifyType(returnType)}`;
         }
       }
-      return `{${type.getProperties().map(p => `${p.name}:${this.getSymbolType(p)}`).join(',')}}`;
+      if (options?.short) {
+        return `{${type.getProperties().map(p => `${p.name}`).join(',')}}`;
+      } else {
+        return `{${type.getProperties().map(p => `${p.name}:${this.getSymbolType(p)}`).join(',')}}`;
+      }
     }
     return type.symbol?.name ?? ((type as any)?.intrinsicName) ?? '';
   }
