@@ -486,7 +486,13 @@ export class BapTypes extends BapRootContextMixin {
           marshalByteSize = elementBinding.byteLength;
         };
         structWriter.writeStaticConstant(context.globalWriter.makeInternalToken('marshalBytesInto'), CodeTypeSpec.functionType, () => {
-          return marshalFuncVar;
+          return (expr: CodeExpressionWriter) => {
+            if (ensuredMarshalable) {
+              expr.writeVariableReference(marshalFuncVar);
+            } else {
+              expr.writeLiteralInt(0);
+            }
+          };
         });
         structWriter.writeStaticConstant(context.globalWriter.makeInternalToken('marshalByteStride'), CodeTypeSpec.functionType, () => {
           return (expr: CodeExpressionWriter) => {

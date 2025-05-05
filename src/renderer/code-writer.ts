@@ -1118,6 +1118,8 @@ export enum CodeBinaryOperator {
   Subtract = '-',
   Multiply = '*',
   Divide = '/',
+  Power = '**',
+  Modulo = '%',
   Equals = '==',
   NotEquals = '!=',
   GreaterThan = '>',

@@ -20,6 +20,7 @@ import { BapContinueStatementVisitor } from "./baps/continue-statement";
 import { BapObjectLiteralExpressionVisitor } from "./baps/object-literal-expression";
 import { BapPropertyAccessExpressionVisitor } from "./baps/property-access-expression";
 import { BapPrefixUnaryExpressionVisitor } from "./baps/prefix-unary-expression";
+import { BapPostfixUnaryExpressionVisitor } from "./baps/postfix-unary-expression";
 import { BapLibLoader } from "./bap-lib-loader";
 import { BapTypeReferenceVisitor } from "./baps/type-reference";
 import { BapElementAccessExpressionVisitor } from "./baps/element-access-expression";
@@ -60,6 +61,7 @@ export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitor
   BapVisitor.mapNodeType(ts.SyntaxKind.ObjectLiteralExpression, BapObjectLiteralExpressionVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.NewExpression, BapNewExpressionVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.PrefixUnaryExpression, BapPrefixUnaryExpressionVisitor);
+  BapVisitor.mapNodeType(ts.SyntaxKind.PostfixUnaryExpression, BapPostfixUnaryExpressionVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.BinaryExpression, BapBinaryExpressionVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.NumericLiteral, BapNumericLiteralVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.TrueKeyword, BapBooleanLiteralVisitor);

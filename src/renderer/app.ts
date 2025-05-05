@@ -264,15 +264,20 @@ function fragmentShader(position: TriangleVertex, options: { alpha: float, beta:
 }
 
 function test() {
-  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
-  positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
-  positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(1, 0, 0, 1) });
-  positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
+  const v: TriangleVertex = { position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) };
+  // v.position = new float4(1, 2, 3, 4);
+  v.position.x += 1;
+  v.position.x++;
+  // const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
+  // positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(1, 0, 0, 1) });
+  // positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
+  // positions[0].position.x = 1.0;
 
-  Gpu.renderElements
-      (positions.length, vertexShader, fragmentShader)
-      (positions, { placeholder: 0.2 })
-      ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(0.1, 0.2, 0.3, 0.0), someBuf: positions });
+  // Gpu.renderElements
+  //     (positions.length, vertexShader, fragmentShader)
+  //     (positions, { placeholder: 0.2 })
+  //     ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(0.1, 0.2, 0.3, 0.0), someBuf: positions });
 }
 `;
 

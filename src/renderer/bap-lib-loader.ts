@@ -689,7 +689,6 @@ export class BapLibLoader extends BapRootContextMixin {
       typedefIdentifier = baseTypeToken;
     }
 
-    const typeName = `BopLib::${type.name}`;
     const newType: BapTypeSpec = {
       prototypeScope: prototypeScope,
       staticScope: staticScope,
@@ -702,14 +701,7 @@ export class BapLibLoader extends BapRootContextMixin {
         marshalSize: marshalSize,
       },
     };
-    // const newType = host.createInternalType({
-    //   identifier: type.name,
-    //   internalIdentifier: externBaseTypeName,
-    // });
-    // newConcreteTypes.push(() => {
-    //   const staticBopVar = instantiateIntoType(typeName, newType, [], true);
-    //   host.globalBlock.mapIdentifier(type.name, CodeTypeSpec.typeType, staticBopVar);
-    // });
+    instanceMap.set(structureKey, newType);
 
     for (let i = 0; i < typeArgCodeSpecs.length; ++i) {
       const typeParameter = typeParameters[i];
@@ -739,7 +731,7 @@ export class BapLibLoader extends BapRootContextMixin {
       const isStaticLike = propDecl.isStatic;
       const declareInScope = isStaticLike ? staticScope : prototypeScope;
       const fieldName = propDecl.name;
-      const fieldType = propDecl.type(typeArgCodeSpecs).type ?? this.types.errorType;
+      const fieldType = this.resolveNewBopType(context, propDecl.type(typeArgCodeSpecs)) ?? this.types.errorType;
       const fieldVar = codeGlobalScope.allocateVariableIdentifier(fieldType.codeTypeSpec, BopIdentifierPrefix.Field, fieldName);
       codeWriter.mapInternalToken(fieldVar.identifierToken, fieldName);
       const fieldIdentifier = fieldVar.identifierToken;
@@ -1180,7 +1172,6 @@ export class BapLibLoader extends BapRootContextMixin {
 
     //   return instantiatedType;
     // }
-    instanceMap.set(structureKey, newType);
     return newType;
   }
 
