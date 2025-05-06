@@ -1,8 +1,8 @@
 import { BapChildScopeOptions, BapPrototypeScope, BapScope, BapThisSymbol } from "./bap-scope";
 import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
 import { GpuBindings } from './gpu-binding/gpu-bindings';
-import { BopIdentifierPrefix } from "./bop-data";
-import { CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator, CodeWriter, CodeTypeSpec, CodeScope, CodeStructWriter, CodeVariable, CodeScopeType, CodeNamedToken } from "./code-writer";
+import { BapIdentifierPrefix } from "./bap-constants";
+import { CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator, CodeWriter, CodeTypeSpec, CodeScope, CodeStructWriter, CodeVariable, CodeScopeType, CodeNamedToken } from "./code-writer/code-writer";
 
 export interface BapSubtreeGenerator {
   generateRead(context: BapGenerateContext, options?: BapGenerateOptions): BapSubtreeValue;
@@ -47,7 +47,7 @@ export class BapGenerateContext {
     instanceBlockWriter.isInternalOnly = true;
     instanceBlockWriter.touchedByGpu = false;
     const instanceVarsToken = globalWriter.makeInternalToken('instanceVars');
-    const instanceVarsIdentifier = globalWriter.global.scope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(instanceVarsTypeIdentifier), BopIdentifierPrefix.Local, 'instanceVars', { fixedIdentifierToken: instanceVarsToken });
+    const instanceVarsIdentifier = globalWriter.global.scope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(instanceVarsTypeIdentifier), BapIdentifierPrefix.Local, 'instanceVars', { fixedIdentifierToken: instanceVarsToken });
 
     const instanceVars = {
       codeVar: instanceVarsIdentifier,

@@ -1,6 +1,6 @@
 import { BapRootContextMixin } from '../bap-root-context-mixin';
 import { BapGenerateContext, BapTypeSpec } from '../bap-value';
-import { CodeVariable, CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator } from '../code-writer';
+import { CodeVariable, CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator } from '../code-writer/code-writer';
 
 
 /** A util to help marshal GPU buffers. */

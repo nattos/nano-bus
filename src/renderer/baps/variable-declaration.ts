@@ -1,7 +1,7 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { CodeStatementWriter, CodeTypeSpec, CodeVariable } from "../code-writer";
-import { BopIdentifierPrefix } from '../bop-data';
+import { CodeStatementWriter, CodeTypeSpec, CodeVariable } from "../code-writer/code-writer";
+import { BapIdentifierPrefix } from '../bap-constants';
 import { BapSubtreeGenerator, BapTypeGenerator } from '../bap-value';
 import { BapIdentifier, BapIdentifierInstance, bapIdentifierToNameHint } from "../bap-scope";
 
@@ -31,7 +31,7 @@ export class BapVariableDeclarationVisitor extends BapVisitor {
             writerFuncs.push((prepare) => {
               const newValueWriter = newValue.writeIntoExpression?.(prepare);
               const codeType = typeSpec?.codeTypeSpec ?? CodeTypeSpec.compileErrorType;
-              codeVar = prepare.scope.allocateVariableIdentifier(codeType, BopIdentifierPrefix.Local, bapIdentifierToNameHint(newVar.identifier));
+              codeVar = prepare.scope.allocateVariableIdentifier(codeType, BapIdentifierPrefix.Local, bapIdentifierToNameHint(newVar.identifier));
               const varDeclStmt = prepare.writeVariableDeclaration(codeVar);
               newValueWriter?.(varDeclStmt.initializer.writeExpression());
             });

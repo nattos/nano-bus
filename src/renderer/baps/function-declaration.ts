@@ -1,6 +1,6 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { CodePrimitiveType } from "../code-writer";
+import { CodePrimitiveType } from "../code-writer/code-writer";
 import { BapControlFlowScopeType, BapReturnValueSymbol } from '../bap-scope';
 import { BapSubtreeGenerator, BapFunctionLiteral, BapSubtreeValue, BapTypeSpec } from '../bap-value';
 import { BapVariableDeclarationVisitor } from './variable-declaration';

@@ -1,7 +1,7 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
 import { BapSubtreeGenerator } from '../bap-value';
-import { CodePrimitiveType } from "../code-writer";
+import { CodePrimitiveType } from "../code-writer/code-writer";
 
 export class BapBooleanLiteralVisitor extends BapVisitor {
   manual({ value }: { value: boolean }): BapSubtreeGenerator|undefined {

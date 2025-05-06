@@ -1,7 +1,7 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { CodePrimitiveType, CodeTypeSpec } from "../code-writer";
-import { BopIdentifierPrefix } from '../bop-data';
+import { CodePrimitiveType, CodeTypeSpec } from "../code-writer/code-writer";
+import { BapIdentifierPrefix } from '../bap-constants';
 import { BapSubtreeGenerator, BapSubtreeValue } from '../bap-value';
 
 export class BapIfStatementVisitor extends BapVisitor {
@@ -19,7 +19,7 @@ export class BapIfStatementVisitor extends BapVisitor {
           type: 'cached',
           typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Bool),
           writeIntoExpression: (prepare) => {
-            const condCodeVar = prepare.scope.allocateVariableIdentifier(CodeTypeSpec.boolType, BopIdentifierPrefix.Local, 'cond');
+            const condCodeVar = prepare.scope.allocateVariableIdentifier(CodeTypeSpec.boolType, BapIdentifierPrefix.Local, 'cond');
             const condCodeVarStmt = prepare.writeVariableDeclaration(condCodeVar);
             const condWriter = condValue.writeIntoExpression?.(prepare);
             condWriter?.(condCodeVarStmt.initializer.writeExpression());

@@ -1,4 +1,4 @@
-export enum BopIdentifierPrefix {
+export enum BapIdentifierPrefix {
   Function = 'F',
   Method = 'M',
   Constructor = 'ctor',

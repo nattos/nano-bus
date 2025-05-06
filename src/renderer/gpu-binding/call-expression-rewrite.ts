@@ -1,8 +1,8 @@
 import ts from 'typescript/lib/typescript';
 import { BapSubtreeGenerator, BapTypeSpec } from '../bap-value';
 import { BapVisitor } from '../bap-visitor';
-import { BopIdentifierPrefix } from '../bop-data';
-import { CodeTypeSpec, CodeScopeType, CodeVariable } from '../code-writer';
+import { BapIdentifierPrefix } from '../bap-constants';
+import { CodeTypeSpec, CodeScopeType, CodeVariable } from '../code-writer/code-writer';
 import { getNodeLabel } from '../ts-helpers';
 import { BufferFiller } from './buffer-filler';
 import { GpuBindings } from './gpu-bindings';
@@ -125,14 +125,14 @@ function bopRenderElementsCall(
           const instanceBlockWriter = context.instanceVars.blockWriter;
           const instanceVarsIdentifier = context.instanceVars.codeVar.identifierToken;
 
-          const pipelineInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLRenderPipelineDescriptor.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_pipeline`);
+          const pipelineInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLRenderPipelineDescriptor.codeTypeSpec, BapIdentifierPrefix.Field, `${pipelineName}_pipeline`);
           instanceBlockWriter.body.writeField(pipelineInstanceVar.identifierToken, basics.MTLRenderPipelineDescriptor.codeTypeSpec);
-          const renderPassDescriptorInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLRenderPassDescriptor.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_renderPassDescriptor`);
+          const renderPassDescriptorInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLRenderPassDescriptor.codeTypeSpec, BapIdentifierPrefix.Field, `${pipelineName}_renderPassDescriptor`);
           instanceBlockWriter.body.writeField(renderPassDescriptorInstanceVar.identifierToken, basics.MTLRenderPassDescriptor.codeTypeSpec);
 
-          const vertexFunctionInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLFunction.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_vertexShader`);
+          const vertexFunctionInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLFunction.codeTypeSpec, BapIdentifierPrefix.Field, `${pipelineName}_vertexShader`);
           instanceBlockWriter.body.writeField(vertexFunctionInstanceVar.identifierToken, basics.MTLFunction.codeTypeSpec);
-          const fragmentFunctionInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLFunction.codeTypeSpec, BopIdentifierPrefix.Field, `${pipelineName}_fragmentShader`);
+          const fragmentFunctionInstanceVar = instanceScope.allocateVariableIdentifier(basics.MTLFunction.codeTypeSpec, BapIdentifierPrefix.Field, `${pipelineName}_fragmentShader`);
           instanceBlockWriter.body.writeField(fragmentFunctionInstanceVar.identifierToken, basics.MTLFunction.codeTypeSpec);
 
           // Resolve fragment function.
@@ -144,7 +144,7 @@ function bopRenderElementsCall(
           // Emit pipeline setup code, and store the pipeline in globals.
           const writer = context.globalWriter;
           {
-            const initFuncIdentifier = writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, `${pipelineName}_prepare`);
+            const initFuncIdentifier = writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BapIdentifierPrefix.Function, `${pipelineName}_prepare`);
             // const initFuncBlock = this.globalBlock.createChildBlock(CodeScopeType.Function);
             const initFuncScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Function);
             const initFunc = writer.global.writeFunction(initFuncIdentifier.identifierToken);
@@ -417,7 +417,7 @@ function bopRenderElementsCall(
               }
               for (const binding of bindings.bindings) {
                 if (binding.type === 'fixed') {
-                  var bufferFillerVar = blockWriter.scope.allocateVariableIdentifier(basics.BufferFiller.codeTypeSpec, BopIdentifierPrefix.Local, 'bufferFiller');
+                  var bufferFillerVar = blockWriter.scope.allocateVariableIdentifier(basics.BufferFiller.codeTypeSpec, BapIdentifierPrefix.Local, 'bufferFiller');
                   // console.log(basics.BufferFiller);
                   const stmt = blockWriter.writeVariableDeclaration(bufferFillerVar);
                   stmt.initializer.writeAssignStructField(writer.makeInternalToken('byteLength')).value.writeLiteralInt(binding.byteLength);

@@ -1,7 +1,7 @@
 import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
 import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator } from "../code-writer";
+import { CodeBinaryOperator } from "../code-writer/code-writer";
 import { getNodeLabel } from "../ts-helpers";
 import { BapSubtreeGenerator, BapGenerateContext } from '../bap-value';
 

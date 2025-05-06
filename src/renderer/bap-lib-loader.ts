@@ -2,8 +2,8 @@ import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
 import { BapFields, BapFunctionLiteral, BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeLiteral, BapTypeSpec, BapWriteAsStatementFunc, BapWriteIntoExpressionFunc } from "./bap-value";
 import { getNodeLabel } from "./ts-helpers";
-import { CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer';
-import { BopIdentifierPrefix } from './bop-data';
+import { CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeWriter } from './code-writer/code-writer';
+import { BapIdentifierPrefix } from './bap-constants';
 import { BapConstructorSymbol, BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapRootContextMixin } from './bap-root-context-mixin';
 import { BapVisitorRootContext } from './bap-visitor';
@@ -657,7 +657,7 @@ export class BapLibLoader extends BapRootContextMixin {
       return oldInstance;
     }
 
-    const baseTypeToken = codeGlobalScope.allocateIdentifier(BopIdentifierPrefix.Struct, type.name);
+    const baseTypeToken = codeGlobalScope.allocateIdentifier(BapIdentifierPrefix.Struct, type.name);
     const externBaseTypeName = `BopLib::${type.name}`;
     codeWriter.mapInternalToken(baseTypeToken, externBaseTypeName);
 
@@ -670,7 +670,7 @@ export class BapLibLoader extends BapRootContextMixin {
     let typedefIdentifier: CodeNamedToken;
     if (isGeneric) {
       instantiatedTypeName = `BopLib_${type.name}_${instanceIndex}`;
-      typedefIdentifier = codeGlobalScope.allocateIdentifier(BopIdentifierPrefix.Struct, instantiatedTypeName);
+      typedefIdentifier = codeGlobalScope.allocateIdentifier(BapIdentifierPrefix.Struct, instantiatedTypeName);
       const isStaticAccess = options?.allowTypeParameters && typeArgSpecs.some(typeArg => typeArg?.codeTypeSpec.asPrimitive === CodePrimitiveType.CompileError);
 
       let typedefType: CodeTypeSpec;
@@ -706,7 +706,7 @@ export class BapLibLoader extends BapRootContextMixin {
     for (let i = 0; i < typeArgCodeSpecs.length; ++i) {
       const typeParameter = typeParameters[i];
       const typeArg = typeArgSpecs[i];
-      const typeParameterCodeIdentifier = codeGlobalScope.allocateIdentifier(BopIdentifierPrefix.Local, typeParameter);
+      const typeParameterCodeIdentifier = codeGlobalScope.allocateIdentifier(BapIdentifierPrefix.Local, typeParameter);
       codeWriter.mapInternalToken(typeParameterCodeIdentifier, typeParameter);
 
       staticScope.declare(
@@ -732,7 +732,7 @@ export class BapLibLoader extends BapRootContextMixin {
       const declareInScope = isStaticLike ? staticScope : prototypeScope;
       const fieldName = propDecl.name;
       const fieldType = this.resolveNewBopType(context, propDecl.type(typeArgCodeSpecs)) ?? this.types.errorType;
-      const fieldVar = codeGlobalScope.allocateVariableIdentifier(fieldType.codeTypeSpec, BopIdentifierPrefix.Field, fieldName);
+      const fieldVar = codeGlobalScope.allocateVariableIdentifier(fieldType.codeTypeSpec, BapIdentifierPrefix.Field, fieldName);
       codeWriter.mapInternalToken(fieldVar.identifierToken, fieldName);
       const fieldIdentifier = fieldVar.identifierToken;
 
@@ -811,7 +811,7 @@ export class BapLibLoader extends BapRootContextMixin {
         const funcSymbol = BapConstructorSymbol;
         const returnType: BapTypeSpec = newType;
         const debugName = `${newType.debugName}.${funcName}`;
-        const funcIdentifier = codeGlobalScope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Method, debugName);
+        const funcIdentifier = codeGlobalScope.allocateVariableIdentifier(CodeTypeSpec.functionType, BapIdentifierPrefix.Method, debugName);
         codeWriter.mapInternalToken(funcIdentifier.identifierToken, internalFunctionName);
 
         declareInScope.declare(
@@ -858,7 +858,7 @@ export class BapLibLoader extends BapRootContextMixin {
         const funcName = method.name;
         const funcSymbol = funcName;
         const debugName = `${newType.debugName}.${funcName}`;
-        const funcIdentifier = codeGlobalScope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Method, debugName);
+        const funcIdentifier = codeGlobalScope.allocateVariableIdentifier(CodeTypeSpec.functionType, BapIdentifierPrefix.Method, debugName);
         codeWriter.mapInternalToken(funcIdentifier.identifierToken, internalFunctionName);
 
         function toResolvedType(type: BapTypeSpec): ResolvedType {

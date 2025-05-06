@@ -1,6 +1,6 @@
 import { BapPrototypeScope } from '../bap-scope';
 import { BapTypeSpec } from '../bap-value';
-import { CodeVariable, CodeStatementWriter, CodeTypeSpec } from '../code-writer';
+import { CodeVariable, CodeStatementWriter, CodeTypeSpec } from '../code-writer/code-writer';
 import { BufferFiller } from './buffer-filler';
 
 

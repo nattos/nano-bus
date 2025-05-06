@@ -1,4 +1,4 @@
-import * as utils from '../utils';
+import * as utils from '../../utils';
 
 const TRACE = true;
 const TRACE_IN_CODE = false;

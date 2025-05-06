@@ -1,10 +1,10 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { CodeAttributeDecl, CodeAttributeKey, CodeNamedToken, CodeScopeType, CodeTypeSpec, CodeVariable } from "../code-writer";
+import { CodeAttributeDecl, CodeAttributeKey, CodeNamedToken, CodeScopeType, CodeTypeSpec, CodeVariable } from "../code-writer/code-writer";
 import { BapControlFlowScopeType, BapPrototypeScope, BapReturnValueSymbol } from '../bap-scope';
 import { BapSubtreeGenerator, BapGenerateContext, BapTypeSpec } from '../bap-value';
 import { BapVariableDeclarationVisitor } from '../baps/variable-declaration';
-import { BopIdentifierPrefix } from '../bop-data';
+import { BapIdentifierPrefix } from '../bap-constants';
 import { makeGpuBindings } from '../gpu-binding/make-bindings';
 import { resolveBapFields } from '../bap-utils';
 import { GpuBindings, GpuFixedBinding } from '../gpu-binding/gpu-bindings';
@@ -59,7 +59,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       return;
     }
 
-    const kernelIdentifier = context.globalWriter.global.scope.allocateIdentifier(BopIdentifierPrefix.Function, functionName);
+    const kernelIdentifier = context.globalWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, functionName);
     const kernelFunc = context.globalWriter.global.writeFunction(kernelIdentifier);
     kernelFunc.touchedByGpu = true;
     if (isGpuComputeFunc) {
@@ -93,7 +93,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     if (needsReturnValue && !hasReturnValue) {
       this.logAssert(`${isGpuVertexFunc} output is not concrete.`);
     } else if (hasCustomReturnType && !isGpuFragmentFunc) {
-      const vertexOutStructIdentifier = context.globalWriter.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${functionName}_${stage}Out`);
+      const vertexOutStructIdentifier = context.globalWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Struct, `${functionName}_${stage}Out`);
       const vertexOutStructWriter = context.globalWriter.global.writeStruct(vertexOutStructIdentifier);
       const vertexOutStructScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Class);
       vertexOutStructWriter.touchedByCpu = false;
@@ -108,7 +108,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
         } else {
           attribs.push({ key: CodeAttributeKey.GpuBindLocation, intValue: fieldIndex });
         }
-        const rawField = vertexOutStructScope.allocateVariableIdentifier(field.type.codeTypeSpec, BopIdentifierPrefix.Field, field.identifier);
+        const rawField = vertexOutStructScope.allocateVariableIdentifier(field.type.codeTypeSpec, BapIdentifierPrefix.Field, field.identifier);
         vertexOutStructWriter.body.writeField(rawField.identifierToken, field.type.codeTypeSpec, { attribs: attribs });
         const accessor = new BapPropertyAccessExpressionVisitor();
         rawFieldAccessWriters.push({
@@ -120,12 +120,12 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
 
       // Grrr... WebGPU disallows empty structs.
       if (vertexOutStructWriter.body.fieldCount === 0) {
-        vertexOutStructWriter.body.writeField(vertexOutStructScope.allocateIdentifier(BopIdentifierPrefix.Field, 'placeholder'), this.types.basic(context).int.codeTypeSpec);
+        vertexOutStructWriter.body.writeField(vertexOutStructScope.allocateIdentifier(BapIdentifierPrefix.Field, 'placeholder'), this.types.basic(context).int.codeTypeSpec);
       }
       marshalReturnCodeTypeSpec = CodeTypeSpec.fromStruct(vertexOutStructIdentifier);
     }
 
-    const vertexStructIdentifier = context.globalWriter.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${functionName}_${stage}In`);
+    const vertexStructIdentifier = context.globalWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Struct, `${functionName}_${stage}In`);
     const vertexStructWriter = context.globalWriter.global.writeStruct(vertexStructIdentifier);
     const vertexStructScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Class);
     vertexStructWriter.touchedByCpu = false;
@@ -173,7 +173,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
           } else {
             attribs.push({ key: CodeAttributeKey.GpuBindLocation, intValue: fieldIndex });
           }
-          const rawField = vertexStructScope.allocateVariableIdentifier(field.type.codeTypeSpec, BopIdentifierPrefix.Field, field.identifier);
+          const rawField = vertexStructScope.allocateVariableIdentifier(field.type.codeTypeSpec, BapIdentifierPrefix.Field, field.identifier);
           vertexStructWriter.body.writeField(rawField.identifierToken, field.type.codeTypeSpec, { attribs: attribs });
           const accessor: BapSubtreeGenerator = {
             generateRead: () => {
@@ -331,10 +331,10 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     const prepare = kernelFunc.body;
 
     const kernelParams = [];
-    const vertexVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.marshalCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, 'vertex');
-    const vertexUserVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.userType.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, 'vertex');
-    const threadIdVar = childCodeScope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken('BopLib::uint')), BopIdentifierPrefix.Local, 'threadId');
-    const fixedVar = context.globalWriter.global.scope.allocateVariableIdentifier(fixedBindings?.bindings.marshalStructCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BopIdentifierPrefix.Local, 'fixed');
+    const vertexVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.marshalCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'vertex');
+    const vertexUserVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.userType.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'vertex');
+    const threadIdVar = childCodeScope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken('BopLib::uint')), BapIdentifierPrefix.Local, 'threadId');
+    const fixedVar = context.globalWriter.global.scope.allocateVariableIdentifier(fixedBindings?.bindings.marshalStructCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'fixed');
     if (vertexBindings) {
       kernelParams.push({ index: vertexParamIndex, typeSpec: vertexVar.typeSpec, codeVar: vertexVar, isUniform: false, attribs: [] });
       const vertexUserInit = prepare.writeVariableDeclaration(vertexUserVar);
@@ -396,7 +396,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     callWriter?.writeIntoExpression?.(innerPrepare);
     innerPrepare.writeBreakStatement();
 
-    const marshalReturnVar = childCodeScope.allocateVariableIdentifier(marshalReturnCodeTypeSpec, BopIdentifierPrefix.Local, 'marshalReturn');
+    const marshalReturnVar = childCodeScope.allocateVariableIdentifier(marshalReturnCodeTypeSpec, BapIdentifierPrefix.Local, 'marshalReturn');
     const marshalReturnInit = prepare.writeVariableDeclaration(marshalReturnVar);
     if (userReturnType?.libType) {
       const returnValueWriter = returnValueGen?.generateRead(childContext).writeIntoExpression?.(prepare);

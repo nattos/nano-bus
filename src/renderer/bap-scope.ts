@@ -1,6 +1,6 @@
 import { BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec } from "./bap-value";
 import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
-import { CodeStatementWriter, CodeBinaryOperator, CodeNamedToken, CodePrimitiveType, getTrace } from "./code-writer";
+import { CodeStatementWriter, CodeBinaryOperator, CodeNamedToken, CodePrimitiveType, getTrace } from "./code-writer/code-writer";
 
 export type BapIdentifier = string|BapSpecialSymbol;
 export type BapSpecialSymbol = typeof BapThisSymbol|typeof BapReturnValueSymbol|typeof BapBreakBreakFlagSymbol;

@@ -2,8 +2,8 @@ import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
 import { BapFields, BapGenerateContext, BapSubtreeGenerator, BapSubtreeValue, BapTypeGenerator, BapTypeSpec, BapWriteAsStatementFunc, BapWriteIntoExpressionFunc } from "./bap-value";
 import { getNodeLabel } from "./ts-helpers";
-import { CodeBinaryOperator, CodeExpressionWriter, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeVariableGroup, CodeWriter } from './code-writer';
-import { BopIdentifierPrefix } from './bop-data';
+import { CodeBinaryOperator, CodeExpressionWriter, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSpec, CodeVariable, CodeVariableGroup, CodeWriter } from './code-writer/code-writer';
+import { BapIdentifierPrefix } from './bap-constants';
 import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapRootContextMixin } from './bap-root-context-mixin';
 import { BapVisitor, BapVisitorRootContext } from './bap-visitor';
@@ -419,7 +419,7 @@ export class BapTypes extends BapRootContextMixin {
         //   fieldIdentifierMap = existingTypeInfo.fieldIdentifierMap;
         // } else {
         {
-          identifier = parentCodeScope.allocateVariableIdentifier(CodeTypeSpec.typeType, BopIdentifierPrefix.Struct, shortName);
+          identifier = parentCodeScope.allocateVariableIdentifier(CodeTypeSpec.typeType, BapIdentifierPrefix.Struct, shortName);
           innerCodeScope = parentCodeScope.createChildScope(CodeScopeType.Class);
           fieldIdentifierMap = new Map();
           // existingTypeInfo = { identifier, innerScope, fieldIdentifierMap };
@@ -429,7 +429,7 @@ export class BapTypes extends BapRootContextMixin {
             if (!this.verifyNotNulllike(typeSpec, `Field ${property.identifier} does not have a valid type.`)) {
               continue;
             }
-            const fieldIdentifier = innerCodeScope.allocateVariableIdentifier(typeSpec.codeTypeSpec, BopIdentifierPrefix.Field, property.identifier);
+            const fieldIdentifier = innerCodeScope.allocateVariableIdentifier(typeSpec.codeTypeSpec, BapIdentifierPrefix.Field, property.identifier);
             fieldIdentifierMap.set(property.identifier, { fieldVar: fieldIdentifier, fieldType: typeSpec });
           }
         }
@@ -445,7 +445,7 @@ export class BapTypes extends BapRootContextMixin {
         }
 
 
-        const marshalFuncVar = context.globalWriter.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, `marshal_${shortName}`);
+        const marshalFuncVar = context.globalWriter.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BapIdentifierPrefix.Function, `marshal_${shortName}`);
         let marshalByteSize = 0;
         let ensuredMarshalable = false;
         const ensureMarshalable = (bapVisitor: BapVisitor) => {
@@ -470,17 +470,17 @@ export class BapTypes extends BapRootContextMixin {
           // binding.userType.structOf.marshalLength = binding.elementBinding.byteLength;
           const codeTypeSpec = CodeTypeSpec.fromStruct(identifier.identifierToken);
           const funcScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Function);
-          const valueVar = funcScope.allocateVariableIdentifier(codeTypeSpec, BopIdentifierPrefix.Local, 'value');
+          const valueVar = funcScope.allocateVariableIdentifier(codeTypeSpec, BapIdentifierPrefix.Local, 'value');
           marshalFunc.addParam(valueVar.typeSpec, valueVar.identifierToken);
-          const bufferFillerVar = funcScope.allocateVariableIdentifier(basics.BufferFiller.codeTypeSpec, BopIdentifierPrefix.Local, 'bufferFiller');
+          const bufferFillerVar = funcScope.allocateVariableIdentifier(basics.BufferFiller.codeTypeSpec, BapIdentifierPrefix.Local, 'bufferFiller');
           marshalFunc.addParam(bufferFillerVar.typeSpec, bufferFillerVar.identifierToken);
-          const indexVar = funcScope.allocateVariableIdentifier(basics.int.codeTypeSpec, BopIdentifierPrefix.Local, 'index');
+          const indexVar = funcScope.allocateVariableIdentifier(basics.int.codeTypeSpec, BapIdentifierPrefix.Local, 'index');
           marshalFunc.addParam(indexVar.typeSpec, indexVar.identifierToken);
           const funcBody = marshalFunc.body;
 
           const bufferFiller = new BufferFiller(context, bufferFillerVar);
 
-          const baseOffsetVar = funcBody.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'baseOffset');
+          const baseOffsetVar = funcBody.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BapIdentifierPrefix.Local, 'baseOffset');
           const baseOffset = funcBody.writeVariableDeclaration(baseOffsetVar).initializer.writeExpression().writeBinaryOperation(CodeBinaryOperator.Multiply);
           baseOffset.lhs.writeVariableReference(indexVar);
           baseOffset.rhs.writeLiteralInt(elementBinding.byteLength);

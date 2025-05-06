@@ -1,8 +1,8 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { CodeTypeSpec } from "../code-writer";
+import { CodeTypeSpec } from "../code-writer/code-writer";
 import { BapSubtreeGenerator } from '../bap-value';
-import { BopIdentifierPrefix } from '../bop-data';
+import { BapIdentifierPrefix } from '../bap-constants';
 
 export class BapObjectLiteralExpressionVisitor extends BapVisitor {
   impl(node: ts.ObjectLiteralExpression): BapSubtreeGenerator|undefined {
@@ -34,7 +34,7 @@ export class BapObjectLiteralExpressionVisitor extends BapVisitor {
           typeSpec: asType,
           writeIntoExpression: (prepare) => {
             const valueWriters = valueValues.map(e => ({ field: e.field, token: e.token, writer: e.value?.writeIntoExpression?.(prepare) }));
-            const intoVar = prepare.scope.allocateVariableIdentifier(asType?.codeTypeSpec ?? CodeTypeSpec.compileErrorType, BopIdentifierPrefix.Local, 'tmp');
+            const intoVar = prepare.scope.allocateVariableIdentifier(asType?.codeTypeSpec ?? CodeTypeSpec.compileErrorType, BapIdentifierPrefix.Local, 'tmp');
             const initializerExpr = prepare.writeVariableDeclaration(intoVar).initializer;
             for (const e of valueWriters) {
               if (!this.verifyNotNulllike(e.token, `Field ${e.field} not found.`)) {

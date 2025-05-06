@@ -3,8 +3,8 @@ import { resolveBapFields } from '../bap-utils';
 import { BapGenerateContext, BapTypeSpec, BapFields, BapSubtreeGenerator } from '../bap-value';
 import { BapVisitor } from '../bap-visitor';
 import { BapPropertyAccessExpressionVisitor } from '../baps/property-access-expression';
-import { BopIdentifierPrefix } from '../bop-data';
-import { CodeAttributeKey, CodeVariable, CodeScopeType, CodeTypeSpec, CodeStatementWriter } from '../code-writer';
+import { BapIdentifierPrefix } from '../bap-constants';
+import { CodeAttributeKey, CodeVariable, CodeScopeType, CodeTypeSpec, CodeStatementWriter } from '../code-writer/code-writer';
 import { BufferFiller } from './buffer-filler';
 import { GpuBindings, GpuFixedBinding, GpuBinding } from './gpu-bindings';
 
@@ -127,7 +127,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     collectedCopyFields.forEach(f => byteLengthAcc += f.copyAsType.libType?.marshalSize ?? 4);
     const byteLength = byteLengthAcc;
 
-    const marshalStructIdentifier = writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Struct, `${typeToBind.debugName}_gpuMarshal`);
+    const marshalStructIdentifier = writer.global.scope.allocateIdentifier(BapIdentifierPrefix.Struct, `${typeToBind.debugName}_gpuMarshal`);
     const marshalStructWriter = writer.global.writeStruct(marshalStructIdentifier);
     const marshalStructScope = writer.global.scope.createChildScope(CodeScopeType.Class);
     // const marshalStructBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
@@ -140,7 +140,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
       const bopType = field.copyAsType;
       const nameHint = `${fieldIndex}_${field.path.map(p => p.identifier).join('_')}`;
       // const rawBopVar = marshalStructBlock.mapIdentifier(`${fieldIndex}_${nameHint}`, bopType.storageType, bopType);
-      const rawField = marshalStructScope.allocateVariableIdentifier(bopType.codeTypeSpec, BopIdentifierPrefix.Field, nameHint);
+      const rawField = marshalStructScope.allocateVariableIdentifier(bopType.codeTypeSpec, BapIdentifierPrefix.Field, nameHint);
       // rawBopVar.result = rawField;
       marshalStructWriter.body.writeField(rawField.identifierToken, bopType.codeTypeSpec, { attribs: [{ key: bindingLocation, intValue: fieldIndex }] });
       unmarshalFields.push({ marshaledVar: rawField, type: bopType, path: field.path });
@@ -194,7 +194,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
       unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
         const rootScope = intoContext;
         for (const field of unmarshalFields) {
-          const proxyVar = body.scope.allocateVariableIdentifier(field.type.codeTypeSpec, BopIdentifierPrefix.Local, field.path.map(p => p.identifier).join('_'));
+          const proxyVar = body.scope.allocateVariableIdentifier(field.type.codeTypeSpec, BapIdentifierPrefix.Local, field.path.map(p => p.identifier).join('_'));
           body.writeVariableDeclaration(proxyVar)
             .initializer.writeExpression().writePropertyAccess(field.marshaledVar.identifierToken)
             .source.writeVariableReference(dataVar);

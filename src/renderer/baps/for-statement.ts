@@ -6,7 +6,7 @@ import { BapBooleanLiteralVisitor } from './boolean-literal';
 import { BapVariableDeclarationVisitor } from './variable-declaration';
 import { BapIdentifierExpressionVisitor } from "./identifier-expression";
 import { BapAssignmentExpressionVisitor } from "./assignment-expression";
-import { CodePrimitiveType, CodeTypeSpec } from "../code-writer";
+import { CodePrimitiveType, CodeTypeSpec } from "../code-writer/code-writer";
 
 export class BapForStatementVisitor extends BapVisitor {
   impl(node: ts.ForStatement): BapSubtreeGenerator|undefined {

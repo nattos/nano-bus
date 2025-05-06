@@ -1,9 +1,9 @@
 import * as utils from '../utils';
 import ts from "typescript/lib/typescript";
-import { CodeVariable, CodeWriter, CodeWriterPlatform } from "./code-writer";
+import { CodeVariable, CodeWriter, CodeWriterPlatform } from "./code-writer/code-writer";
 import { BapVisitorRootContext } from "./bap-visitor";
 import { BapTypes } from "./bap-types";
-import { BopIdentifierPrefix } from "./bop-data";
+import { BapIdentifierPrefix } from "./bap-constants";
 import { evalJavascriptInContext, PushInternalContinueFlag, SharedMTLInternals } from './bop-javascript-lib';
 import { writeSourceNodeCode } from './bap-processor';
 
@@ -101,12 +101,12 @@ function translateProgram(init: {
   const tc = init.program.getTypeChecker();
   // sourceRoot.statements.forEach(this.printRec.bind(this));
 
-  const initFuncIdentifier = writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Function, 'init');
+  const initFuncIdentifier = writer.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, 'init');
   const initFunc = writer.global.writeFunction(initFuncIdentifier);
   initFunc.touchedByCpu = true;
   const initFuncBlockWriter = initFunc.body;
 
-  const runFuncIdentifier = writer.global.scope.allocateIdentifier(BopIdentifierPrefix.Function, 'run');
+  const runFuncIdentifier = writer.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, 'run');
   const runFunc = writer.global.writeFunction(runFuncIdentifier);
   runFunc.touchedByCpu = true;
   const blockWriter = runFunc.body;
