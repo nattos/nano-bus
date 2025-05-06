@@ -1,4 +1,4 @@
-import * as utils from '../utils';
+import * as utils from '../../utils';
 import { WGSL_LIB_CODE, WGSL_LIB_PREAMBLE_CODE } from './bop-wgsl-lib';
 
 

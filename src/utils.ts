@@ -1,5 +1,3 @@
-import { PathsDirectoryHandle, PathsFileHandle } from "./renderer/paths";
-
 export type EnumKeyRecord<TEnum, TValue> = Record<Extract<TEnum, string>, TValue>;
 
 export class Resolvable<T extends any|void> {
@@ -437,43 +435,6 @@ export function filePathResolveAbsPath(path: string, relativeTo: string): string
 
 export function filePathCombine(...parts: string[]): string {
   return parts.filter(part => part.length > 0).join('/');
-}
-
-export async function getSubpathDirectory(directory: PathsDirectoryHandle, subpath: string): Promise<PathsDirectoryHandle|undefined> {
-  let found: PathsDirectoryHandle = directory;
-  for (const toFind of subpath.split('/')) {
-    if (toFind === '.' || toFind === '') {
-      continue;
-    }
-    const child = await found.getDirectoryHandle(toFind);
-    if (child === undefined) {
-      return undefined;
-    }
-    found = child;
-  }
-  return found;
-}
-
-export async function getSubpathFile(directory: PathsDirectoryHandle|undefined, subpath: string): Promise<PathsFileHandle|undefined> {
-  if (!directory) {
-    return undefined;
-  }
-  const pathToDirectory = filePathDirectory(subpath);
-  const fileName = filePathFileName(subpath);
-  const containingDirectory = await getSubpathDirectory(directory, pathToDirectory);
-  if (!containingDirectory) {
-    return undefined;
-  }
-  try {
-    return await containingDirectory.getFileHandle(fileName);
-  } catch (e) {
-    if (e instanceof DOMException) {
-      if (e.name === 'NotFoundError') {
-        return undefined;
-      }
-    }
-    throw e;
-  }
 }
 
 export interface Point2D {

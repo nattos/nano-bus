@@ -4,7 +4,7 @@ import { CodeVariable, CodeWriter, CodeWriterPlatform } from "./code-writer/code
 import { BapVisitorRootContext } from "./bap-visitor";
 import { BapTypes } from "./bap-types";
 import { BapIdentifierPrefix } from "./bap-constants";
-import { evalJavascriptInContext, PushInternalContinueFlag, SharedMTLInternals } from './bop-javascript-lib';
+import { evalJavascriptInContext, PushInternalContinueFlag, SharedMTLInternals } from './runtime/bop-javascript-lib';
 import { writeSourceNodeCode } from './bap-processor';
 
 export interface CompiledDebugIn {
