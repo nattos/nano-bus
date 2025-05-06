@@ -7,7 +7,10 @@ import { BopIdentifierPrefix } from './bop-data';
 import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapRootContextMixin } from './bap-root-context-mixin';
 import { BapVisitor, BapVisitorRootContext } from './bap-visitor';
-import { BufferFiller, GpuFixedBinding, makeGpuBindings, resolveBapFields } from './baps/call-expression';
+import { makeGpuBindings } from './gpu-binding/make-bindings';
+import { resolveBapFields } from './bap-utils';
+import { GpuFixedBinding } from './gpu-binding/gpu-bindings';
+import { BufferFiller } from './gpu-binding/buffer-filler';
 
 // import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType, BopFunctionConcreteImplDetail, BopFunctionOf } from './bop-type';
 // import { BopBlock, BopIdentifierPrefix, BopGenericFunction, BopPropertyAccessor, BopVariable } from './bop-data';

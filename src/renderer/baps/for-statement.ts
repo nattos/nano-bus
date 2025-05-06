@@ -15,7 +15,6 @@ export class BapForStatementVisitor extends BapVisitor {
       return;
     }
 
-
     const breakBreakFlagDeclVisitor = new BapVariableDeclarationVisitor();
     const breakBreakFlagDeclGen = breakBreakFlagDeclVisitor.manual({
       newVars: [

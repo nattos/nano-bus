@@ -1,8 +1,7 @@
-import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
 import { BapSubtreeGenerator, BapGenerateContext } from "../bap-value";
 import { BapVisitor } from "../bap-visitor";
-import { CodeBinaryOperator, CodePrimitiveType, CodeTypeSpec, CodeUnaryOperator } from "../code-writer";
+import { CodeBinaryOperator, CodeTypeSpec } from "../code-writer";
 import { BapBinaryExpressionVisitor } from './binary-expression';
 import { BapNumericLiteralVisitor } from './numeric-literal';
 import { BopIdentifierPrefix } from '../bop-data';

@@ -1,30 +1,11 @@
-import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
-import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator, CodePrimitiveType, CodeTypeSpec, CodeVariable } from "../code-writer";
-import { getNodeLabel } from "../ts-helpers";
+import { BapVisitor } from "../bap-visitor";
+import { CodePrimitiveType, CodeTypeSpec } from "../code-writer";
 import { BopIdentifierPrefix } from '../bop-data';
 import { BapSubtreeGenerator, BapSubtreeValue } from '../bap-value';
 
 export class BapIfStatementVisitor extends BapVisitor {
   impl(node: ts.IfStatement): BapSubtreeGenerator|undefined {
-    // const condBop = this.visitChild(node.expression);
-    // const branches: BopBlock[] = [ this.visitInBlock(node.thenStatement, CodeScopeType.Local) ];
-    // if (node.elseStatement) {
-    //   branches.push(this.visitInBlock(node.elseStatement, CodeScopeType.Local));
-    // }
-    // return {
-    //   produceResult: () => {
-    //     const condVar = this.writeCoersionFromExpr(condBop, this.booleanType, this.blockWriter);
-    //     const ret = this.blockWriter.writeConditional(branches.length);
-    //     ret.branches[0].condWriter.writeVariableReference(condVar);
-    //     this.writeBlock(branches[0], ret.branches[0].blockWriter);
-    //     return {};
-    //   },
-    // };
-
-
-
     if (!node.expression) {
       // TODO: Control flow!!!
       return;
@@ -62,19 +43,5 @@ export class BapIfStatementVisitor extends BapVisitor {
         };
       },
     };
-    // const valueBop = this.visitChildOrNull(node.expression);
-    // return {
-    //   produceResult: () => {
-    //     if (valueBop) {
-    //       // Coerce to return type.
-    //       const returnType = this.scopeReturnType;
-    //       const valueVar = this.writeCoersionFromExpr(valueBop, returnType, this.blockWriter);
-
-    //       const ret = this.blockWriter.writeReturnStatement();
-    //       ret.expr.writeVariableReference(valueVar);
-    //     }
-    //     return {};
-    //   },
-    // };
   }
 }

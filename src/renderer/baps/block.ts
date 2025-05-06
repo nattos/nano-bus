@@ -22,7 +22,5 @@ export class BapBlockVisitor extends BapVisitor {
         };
       },
     };
-    // node.statements.forEach(this.visitChild.bind(this));
-    // return {};
   }
 }

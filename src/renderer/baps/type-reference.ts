@@ -20,7 +20,6 @@ export class BapTypeReferenceVisitor extends BapVisitor {
 
     return {
       generateRead: (context) => {
-        // console.log('resolving', identifierName);
         let innerScope = context.scope;
         let bindContext: BapGenerateContext|undefined;
         if (typeArgData) {

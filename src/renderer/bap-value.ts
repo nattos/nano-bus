@@ -1,6 +1,6 @@
 import { BapChildScopeOptions, BapPrototypeScope, BapScope, BapThisSymbol } from "./bap-scope";
 import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
-import { GpuBindings } from "./baps/call-expression";
+import { GpuBindings } from './gpu-binding/gpu-bindings';
 import { BopIdentifierPrefix } from "./bop-data";
 import { CodeStatementWriter, CodeExpressionWriter, CodeBinaryOperator, CodeWriter, CodeTypeSpec, CodeScope, CodeStructWriter, CodeVariable, CodeScopeType, CodeNamedToken } from "./code-writer";
 
@@ -70,12 +70,6 @@ export interface BapGenerateOptions {
   willCoerceTo?: BapTypeSpec;
   allowTypeParameters?: boolean;
 }
-
-// export interface BapSubtree {
-//   isLiteral: boolean;
-//   isTypeLiteral: boolean;
-//   isCached: boolean;
-// }
 
 export type BapSubtreeValue = BapLiteral|BapTypeLiteral|BapFunctionLiteral|BapCachedValue|BapEvalValue|BapStatementValue|BapUninitializedValue|BapErrorValue;
 export type BapWriteIntoExpressionFunc = (prepare: CodeStatementWriter) => ((result: CodeExpressionWriter) => void)|undefined;

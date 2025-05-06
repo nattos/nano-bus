@@ -1,7 +1,5 @@
-import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
 import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator } from "../code-writer";
 import { getNodeLabel } from "../ts-helpers";
 import { BapFunctionDeclarationVisitor } from './function-declaration';
 import { BapSubtreeGenerator, BapGenerateContext, BapFunctionLiteral, BapTypeGenerator } from '../bap-value';
@@ -70,19 +68,7 @@ export class BapGlobalBlockVisitor extends BapVisitor {
             }
           },
         };
-        // const stmtValues = stmts.map(stmt => stmt?.generateRead(context));
-        // return {
-        //   type: 'statement',
-        //   writeIntoExpression: (prepare) => {
-        //     for (const stmtValue of stmtValues) {
-        //       stmtValue?.writeIntoExpression?.(prepare)?.(prepare.writeExpressionStatement().expr);
-        //     }
-        //     return undefined;
-        //   },
-        // };
       },
     };
-    // node.statements.forEach(this.visitChild.bind(this));
-    // return {};
   }
 }

@@ -1,13 +1,11 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { BapIdentifier } from '../bap-scope';
 import { BapSubtreeGenerator } from '../bap-value';
 
 export class BapElementAccessExpressionVisitor extends BapVisitor {
   impl(node: ts.ElementAccessExpression): BapSubtreeGenerator|undefined {
     const indexGen = this.child(node.argumentExpression);
     const fromGen = this.child(node.expression);
-    // const resultType = this.resolveType(this.tc.getTypeAtLocation(node));
 
     return {
       generateRead: (context) => {
@@ -25,7 +23,6 @@ export class BapElementAccessExpressionVisitor extends BapVisitor {
             };
           },
           generateWrite: () => {
-            console.log('generateWrite');
             return undefined;
           },
         };
@@ -48,37 +45,5 @@ export class BapElementAccessExpressionVisitor extends BapVisitor {
         };
       },
     };
-
-    // return {
-    //   resolveIdentifiers: () => {
-    //   },
-    //   produceResult: () => {
-    //     const indexBopVar = this.readResult(indexBop);
-    //     const fromBopVar = this.readResult(fromBop);
-
-    //     let outType = resultType.tempType;
-    //     let isDirectAccess = false;
-    //     if (asAssignableRef) {
-    //       outType = outType.toReference();
-    //       isDirectAccess = true;
-    //     }
-
-    //     const [accessVar, accessBopVar] = allocTmpOut(outType, resultType);
-    //     const indexAccess = this.blockWriter.writeVariableDeclaration(accessVar).initializer.writeExpression().writeIndexAccess();
-    //     indexAccess.source.writeVariableReference(fromBopVar.result!);
-    //     indexAccess.index.writeVariableReference(indexBopVar.result!);
-    //     accessBopVar.requiresDirectAccess = isDirectAccess;
-    //     return {
-    //       expressionResult: accessBopVar,
-    //     };
-    //   },
-    //   isAssignableRef: asAssignableRef,
-    // };
-
-
-
-    // const thisGen = this.child(node.expression);
-    // const identifierName = node.name.text;
-    // return this.manual({ thisGen, identifierName });
   }
 }

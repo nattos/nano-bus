@@ -1,8 +1,6 @@
-import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
-import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator, CodeTypeSpec } from "../code-writer";
-import { getNodeLabel } from "../ts-helpers";
+import { BapVisitor } from "../bap-visitor";
+import { CodeTypeSpec } from "../code-writer";
 import { BapSubtreeGenerator } from '../bap-value';
 import { BopIdentifierPrefix } from '../bop-data';
 
@@ -51,50 +49,5 @@ export class BapObjectLiteralExpressionVisitor extends BapVisitor {
         };
       },
     };
-
-    // const willCoerceFieldsTo = new Map<string, CoersionRef>();
-    // const initializers: Array<{ field: string, valueBop: BopStage, propertyRef: () => BopReference }> = [];
-    // for (const p of node.properties) {
-    //   if (ts.isPropertyAssignment(p)) {
-    //     const field = p.name.getText();
-    //     const valueBop = this.visitChild(p.initializer);
-    //     initializers.push({ field, valueBop, propertyRef: utils.lazy(() => createBopReference(field, asType.innerBlock)) });
-    //     willCoerceFieldsTo.set(field, { assignedFromBop: valueBop });
-    //   } else {
-    //     this.logAssert(`Unknown object literal syntax.`);
-    //     continue;
-    //   }
-    // }
-    //
-    // const asType = this.resolveType(this.tc.getTypeAtLocation(node), { willCoerceFieldsTo });
-    // // const storage = createStorage(asType);
-
-    // return {
-    //   resolveIdentifiers: () => {
-    //     initializers.forEach(e => this.resolve(e.propertyRef()));
-    //   },
-    //   // resolveStorage: () => {
-    //   //   this.resolveStorage(storage);
-    //   // },
-    //   produceResult: () => {
-    //     const initializerVars: Array<{ identifierToken: CodeNamedToken, valueVar: CodeVariable }> = [];
-    //     for (const initializer of initializers) {
-    //       const prop = initializer.propertyRef().resolvedRef;
-    //       const propRef = prop?.result;
-    //       if (!this.verifyNotNulllike(prop, `Property ${initializer.field} is undefined.`) ||
-    //           !this.verifyNotNulllike(propRef, `Property ${initializer.field} is undefined.`)) {
-    //         return;
-    //       }
-    //       initializerVars.push({ identifierToken: propRef.identifierToken, valueVar: this.writeCoersionFromExpr(initializer.valueBop, prop.bopType, this.blockWriter) });
-    //     }
-
-    //     const [outVar, outBopVar] = allocTmpOut(asType.tempType, asType, asType.debugName);
-    //     const ret = this.blockWriter.writeVariableDeclaration(outVar);
-    //     for (const initializer of initializerVars) {
-    //       ret.initializer.writeAssignStructField(initializer.identifierToken).value.writeVariableReference(initializer.valueVar);
-    //     }
-    //     return { expressionResult: outBopVar };
-    //   },
-    // };
   }
 }

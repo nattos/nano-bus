@@ -27,22 +27,6 @@ export class BapNumericLiteralVisitor extends BapVisitor {
         };
       },
     };
-    // return {
-    //   produceResult: () => {
-    //     const numberType = asInt ? this.intType : this.floatType;
-    //     const [outVar, outBopVar] = allocTmpOut(numberType.storageType, numberType, node.text);
-    //     const ret = this.blockWriter.writeVariableDeclaration(outVar);
-    //     if (asInt) {
-    //       ret.initializer.writeExpression().writeLiteralInt(parsedInt ?? Number.NaN);
-    //     } else {
-    //       ret.initializer.writeExpression().writeLiteralFloat(parsedFloat ?? Number.NaN);
-    //     }
-    //     return { expressionResult: outBopVar };
-    //   },
-    //   getAuxTypeInference: () => {
-    //     return { numberType: asInt ? BopInferredNumberType.Int : BopInferredNumberType.Float };
-    //   },
-    // };
   }
   impl(node: ts.NumericLiteral): BapSubtreeGenerator|undefined {
     const parsedInt = utils.parseIntOr(node.text);
