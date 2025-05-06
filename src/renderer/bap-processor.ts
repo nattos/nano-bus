@@ -9,7 +9,7 @@ import { BapNewExpressionVisitor } from "./baps/new-expression";
 import { BapNumericLiteralVisitor } from "./baps/numeric-literal";
 import { BapReturnStatementVisitor } from "./baps/return-statement";
 import { BapVariableDeclarationVisitor } from "./baps/variable-declaration";
-import { CodeStatementWriter, CodeWriter } from "./code-writer";
+import { CodeNamedToken, CodeScope, CodeScopeType, CodeStatementWriter, CodeStructWriter, CodeTypeSpec, CodeVariable, CodeWriter, CodeWriterPlatform } from "./code-writer";
 import { BapGlobalBlockVisitor } from "./baps/global-block";
 import { BapVisitor, BapVisitorRootContext } from "./bap-visitor";
 import { BapIfStatementVisitor } from "./baps/if-statement";
@@ -24,6 +24,8 @@ import { BapPostfixUnaryExpressionVisitor } from "./baps/postfix-unary-expressio
 import { BapLibLoader } from "./bap-lib-loader";
 import { BapTypeReferenceVisitor } from "./baps/type-reference";
 import { BapElementAccessExpressionVisitor } from "./baps/element-access-expression";
+import { BapTypes } from "./bap-types";
+import { BopIdentifierPrefix } from "./bop-data";
 
 
 class BapPassThroughVisitor<T extends ts.Node> extends BapVisitor {

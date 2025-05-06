@@ -1,5 +1,4 @@
 import { html, LitElement, PropertyValueMap } from 'lit';
-import {} from 'lit/html';
 import { customElement, query, property } from 'lit/decorators.js';
 import { classMap } from 'lit/directives/class-map.js';
 import { action, autorun, observable, makeObservable, runInAction } from 'mobx';
@@ -12,7 +11,7 @@ import { getCommands } from './app-commands';
 import { getBrowserWindow } from './renderer-ipc';
 import { handlesFromDataTransfer } from './paths';
 import { adoptCommonStyleSheets } from './stylesheets';
-import * as bop from './bop';
+import * as bap from './bap';
 import { SharedMTLInternals } from './bop-javascript-lib';
 
 RecyclerView; // Necessary, possibly beacuse RecyclerView is templated?
@@ -264,20 +263,20 @@ function fragmentShader(position: TriangleVertex, options: { alpha: float, beta:
 }
 
 function test() {
-  const v: TriangleVertex = { position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) };
+  // const v: TriangleVertex = { position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) };
   // v.position = new float4(1, 2, 3, 4);
-  v.position.x += 1;
-  v.position.x++;
-  // const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
-  // positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
-  // positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(1, 0, 0, 1) });
-  // positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
-  // positions[0].position.x = 1.0;
+  // v.position.x += 1;
+  // v.position.x++;
+  const positions: TriangleVertex[] = Array.persistent<TriangleVertex>(3);
+  positions[0] = ({ position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) });
+  positions[1] = ({ position: new float4(1, 0.25, 0, 1), color: new float4(1, 0, 0, 1) });
+  positions[2] = ({ position: new float4(0.5, 0.5, 0, 1), color: new float4(0, 0, 0, 1) });
+  positions[0].position.x = 1.0;
 
-  // Gpu.renderElements
-  //     (positions.length, vertexShader, fragmentShader)
-  //     (positions, { placeholder: 0.2 })
-  //     ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(0.1, 0.2, 0.3, 0.0), someBuf: positions });
+  Gpu.renderElements
+      (positions.length, vertexShader, fragmentShader)
+      (positions, { placeholder: 0.2 })
+      ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(0.1, 0.2, 0.3, 0.0), someBuf: positions });
 }
 `;
 
@@ -331,12 +330,9 @@ export class NanoApp extends LitElement {
       const webGpuContext = this.gpuCanvas.getContext("webgpu")!;
       SharedMTLInternals().setTargetCanvasContext(webGpuContext);
 
-      // const wgslCode = await (await fetch('/example.out.wgsl')).text();
-      // SharedMTLInternals().loadShaderCode(wgslCode);
-
       const fullCode = initialCode;
       const codeLines = fullCode.split('\n');
-      const compileResult = await bop.compile(fullCode);
+      const compileResult = await bap.compile(fullCode);
       await compileResult.frameRunner.runOneFrame();
       console.log('done compileResult.frameRunner.runOneFrame()');
       await compileResult.frameRunner.runOneFrame();
