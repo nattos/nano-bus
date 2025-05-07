@@ -244,10 +244,12 @@ function vertexShader(position: TriangleVertex, threadId: int, options: { placeh
 @fragmentShader
 function fragmentShader(position: TriangleVertex, options: { alpha: float, beta: float, other: { theta: float }, color: float4, someBuf: TriangleVertex[] }): float4 {
   let color = position.color;
-  // const bufValue = options.someBuf[0].position.x;
+  const buf = options.someBuf[0];
+  const bufValue = buf.position.x;
   // const lenValue = options.someBuf.length;
   // color.x = gpuTest(options.alpha) / options.beta + options.other.theta;
   // color = color * 5.0 + (-color) * 4.0;
+  color.x += bufValue;
   color = color + options.color;
   return color;
 }

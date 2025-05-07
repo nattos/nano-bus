@@ -73,6 +73,7 @@ export interface BapGenerateOptions {
 
 export type BapSubtreeValue = BapLiteral|BapTypeLiteral|BapFunctionLiteral|BapCachedValue|BapEvalValue|BapStatementValue|BapUninitializedValue|BapErrorValue;
 export type BapWriteIntoExpressionFunc = (prepare: CodeStatementWriter) => ((result: CodeExpressionWriter) => void)|undefined;
+export type BapWriteIndexAccessIntoExpressionFunc = (prepare: CodeStatementWriter, indexValue: BapSubtreeValue) => ((result: CodeExpressionWriter) => void)|undefined;
 export type BapWriteAsStatementFunc = (prepare: CodeStatementWriter) => ((block: CodeStatementWriter) => void)|undefined;
 
 export interface BapLiteral extends BapSubtreeValueBase {
@@ -117,6 +118,7 @@ export interface BapSubtreeValueBase {
   noPassAsArg?: boolean;
   typeSpec?: BapTypeSpec;
   writeIntoExpression?: BapWriteIntoExpressionFunc;
+  writeIndexAccessIntoExpression?: BapWriteIndexAccessIntoExpressionFunc;
 }
 
 

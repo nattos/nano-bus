@@ -189,6 +189,7 @@ export class CodeWriter {
   private readonly internalTokensInv = new Map<string, CodeNamedToken>();
 
   readonly errorToken = this.makeInternalToken('error');
+  readonly underscoreToken = this.makeInternalToken('_');
 
   constructor() {
   }
@@ -912,11 +913,11 @@ export class CodeStatementWriter implements CodeWriterFragment {
       } else if (context.platform === CodeWriterPlatform.WebGPU && !context.isGpu) {
         if (DEBUG) {
           stream.writeWhitespace();
-          stream.writeToken('/*');
+          stream.writeBlockCommentBegin();
           stream.writeWhitespace();
           stream.writeTypeSpec(thisVar.typeSpec);
           stream.writeWhitespace();
-          stream.writeToken('*/');
+          stream.writeBlockCommentEnd();
         }
       }
       if (result.initializer.isDefined) {
@@ -1449,6 +1450,18 @@ export class CodeExpressionWriter extends CodeExpressionWriterBase {
         stream.writeToken(ref);
       }
     });
+  }
+  writeReferenceExpr(): { value: CodeExpressionWriter } {
+    const result = {
+      value: new CodeExpressionWriter(),
+    };
+    this.setWriter((stream, context) => {
+      if (context.platform === CodeWriterPlatform.WebGPU && context.isGpu) {
+        stream.writeToken('&');
+      }
+      result.value.writerFunc(stream, context);
+    });
+    return result;
   }
   writeDereferenceExpr(): { value: CodeExpressionWriter } {
     const result = {

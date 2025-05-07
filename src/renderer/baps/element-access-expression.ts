@@ -14,6 +14,9 @@ export class BapElementAccessExpressionVisitor extends BapVisitor {
         return {
           type: 'cached',
           writeIntoExpression: (prepare) => {
+            if (fromValue?.writeIndexAccessIntoExpression && indexValue) {
+              return fromValue.writeIndexAccessIntoExpression(prepare, indexValue);
+            }
             const indexWriter = indexValue?.writeIntoExpression?.(prepare);
             const fromWriter = fromValue?.writeIntoExpression?.(prepare);
             return (expr) => {

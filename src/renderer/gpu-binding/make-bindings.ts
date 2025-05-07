@@ -4,9 +4,10 @@ import { BapGenerateContext, BapTypeSpec, BapFields, BapSubtreeGenerator } from 
 import { BapVisitor } from '../bap-visitor';
 import { BapPropertyAccessExpressionVisitor } from '../baps/property-access-expression';
 import { BapIdentifierPrefix } from '../bap-constants';
-import { CodeAttributeKey, CodeVariable, CodeScopeType, CodeTypeSpec, CodeStatementWriter } from '../code-writer/code-writer';
+import { CodeAttributeKey, CodeVariable, CodeScopeType, CodeTypeSpec, CodeStatementWriter, CodeExpressionWriter } from '../code-writer/code-writer';
 import { BufferFiller } from './buffer-filler';
 import { GpuBindings, GpuFixedBinding, GpuBinding } from './gpu-bindings';
+import { BapAssignmentExpressionVisitor } from '../baps/assignment-expression';
 
 
 /**
@@ -121,6 +122,62 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
   visitRec([], typeFields);
   popVisitType(typeToBind);
 
+  const unmarshalProxyPath = (path: PathPart[], rootScope: BapPrototypeScope, valueGen: BapSubtreeGenerator) => {
+    let childScope = rootScope;
+    let leafVar;
+    for (let i = 0; i < path.length; ++i) {
+      const part = path[i];
+      const requiresShadow = i < path.length - 1;
+      const fieldName = part.identifier;
+      let fieldVar: BapPrototypeMember | undefined = childScope.resolveMember(fieldName);
+      if (fieldVar) {
+        if (requiresShadow) {
+          const shadowType = fieldVar.genType.generate(context);
+          if (!shadowType || !shadowType.isShadow) {
+            break;
+          }
+          childScope = shadowType.prototypeScope;
+        }
+      } else {
+        const prototypeScope = new BapPrototypeScope();
+        const staticScope = new BapPrototypeScope();
+        const shadowType: BapTypeSpec = {
+          prototypeScope: prototypeScope,
+          staticScope: staticScope,
+          typeParameters: [],
+          codeTypeSpec: part.bopType.codeTypeSpec,
+          isShadow: true,
+          debugName: part.bopType.debugName + '_shadow',
+        };
+        fieldVar = {
+          gen: (bindScope) => {
+            return ({
+              generateRead: () => ({
+                type: 'eval',
+                typeSpec: shadowType,
+              })
+            });
+          },
+          genType: { generate: () => { return shadowType; } },
+          token: context.globalWriter.errorToken,
+          isField: true,
+        };
+        childScope.declare(fieldName, fieldVar);
+        childScope = prototypeScope;
+      }
+      if (requiresShadow && !fieldVar?.genType.generate(context)?.isShadow) {
+        break;
+      }
+      leafVar = fieldVar;
+    }
+    if (leafVar) {
+      leafVar.gen = (bindScope) => {
+        return valueGen;
+      };
+    }
+  };
+
+
   const bindings: GpuBinding[] = [];
   if (collectedCopyFields.length > 0) {
     let byteLengthAcc = 0;
@@ -130,7 +187,6 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     const marshalStructIdentifier = writer.global.scope.allocateIdentifier(BapIdentifierPrefix.Struct, `${typeToBind.debugName}_gpuMarshal`);
     const marshalStructWriter = writer.global.writeStruct(marshalStructIdentifier);
     const marshalStructScope = writer.global.scope.createChildScope(CodeScopeType.Class);
-    // const marshalStructBlock = this.globalBlock.createChildBlock(CodeScopeType.Class);
     marshalStructWriter.touchedByCpu = false;
     marshalStructWriter.touchedByGpu = true;
     const unmarshalFields: Array<{ marshaledVar: CodeVariable; type: BapTypeSpec; path: PathPart[]; }> = [];
@@ -139,9 +195,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     for (const field of collectedCopyFields) {
       const bopType = field.copyAsType;
       const nameHint = `${fieldIndex}_${field.path.map(p => p.identifier).join('_')}`;
-      // const rawBopVar = marshalStructBlock.mapIdentifier(`${fieldIndex}_${nameHint}`, bopType.storageType, bopType);
       const rawField = marshalStructScope.allocateVariableIdentifier(bopType.codeTypeSpec, BapIdentifierPrefix.Field, nameHint);
-      // rawBopVar.result = rawField;
       marshalStructWriter.body.writeField(rawField.identifierToken, bopType.codeTypeSpec, { attribs: [{ key: bindingLocation, intValue: fieldIndex }] });
       unmarshalFields.push({ marshaledVar: rawField, type: bopType, path: field.path });
       field.marshalStructField = rawField;
@@ -149,14 +203,8 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     }
 
     const marshalStructCodeTypeSpec = CodeTypeSpec.fromStruct(marshalStructIdentifier);
-    // const marshalStructType: BapTypeSpec = BopType.createPassByValue({
-    //   debugName: marshalStructIdentifier.nameHint,
-    //   valueType: CodeTypeSpec.fromStruct(marshalStructIdentifier),
-    //   innerScope: marshalStructScope,
-    //   innerBlock: marshalStructBlock,
-    //   structOf: new BopStructType(marshalStructFields),
-    // });
     const self = this;
+
     bindings.push({
       type: 'fixed',
       nameHint: collectedCopyFields.map(f => f.path.at(-1)?.identifier ?? 'unknown').join('_'),
@@ -192,158 +240,129 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
         });
       },
       unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
-        const rootScope = intoContext;
         for (const field of unmarshalFields) {
-          const proxyVar = body.scope.allocateVariableIdentifier(field.type.codeTypeSpec, BapIdentifierPrefix.Local, field.path.map(p => p.identifier).join('_'));
-          body.writeVariableDeclaration(proxyVar)
-            .initializer.writeExpression().writePropertyAccess(field.marshaledVar.identifierToken)
-            .source.writeVariableReference(dataVar);
-
-          let childScope = rootScope;
-          let leafVar;
-          for (let i = 0; i < field.path.length; ++i) {
-            const part = field.path[i];
-            const requiresShadow = i < field.path.length - 1;
-            const fieldName = part.identifier;
-            let fieldVar: BapPrototypeMember | undefined = childScope.resolveMember(fieldName);
-            if (fieldVar) {
-              if (requiresShadow) {
-                const shadowType = fieldVar.genType.generate(context);
-                if (!shadowType || !shadowType.isShadow) {
-                  break;
-                }
-                childScope = shadowType.prototypeScope;
-              }
-            } else {
-              const prototypeScope = new BapPrototypeScope();
-              const staticScope = new BapPrototypeScope();
-              const shadowType: BapTypeSpec = {
-                prototypeScope: prototypeScope,
-                staticScope: staticScope,
-                typeParameters: [],
-                codeTypeSpec: part.bopType.codeTypeSpec,
-                isShadow: true,
-                debugName: part.bopType.debugName + '_shadow',
-              };
-              fieldVar = {
-                gen: (bindScope) => {
-                  return ({
-                    generateRead: () => ({
-                      type: 'eval',
-                      typeSpec: shadowType,
-                    })
-                  });
-                },
-                genType: { generate: () => { return shadowType; } },
-                token: context.globalWriter.errorToken,
-                isField: true,
-              };
-              childScope.declare(fieldName, fieldVar);
-              childScope = prototypeScope;
-            }
-            if (requiresShadow && !fieldVar?.genType.generate(context)?.isShadow) {
-              break;
-            }
-            leafVar = fieldVar;
-          }
-          if (leafVar) {
-            leafVar.gen = (bindScope) => {
-              return ({
-                generateRead: () => ({
-                  type: 'eval',
-                  typeSpec: field.type,
-                  writeIntoExpression: (prepare) => {
-                    return (expr) => {
-                      expr.writePropertyAccess(field.marshaledVar.identifierToken).source.writeVariableReference(dataVar);
-                    };
-                  },
-                })
-              });
-            };
-          }
+          unmarshalProxyPath(field.path, intoContext, {
+            generateRead: () => ({
+              type: 'eval',
+              typeSpec: field.type,
+              writeIntoExpression: (prepare) => {
+                return (expr) => {
+                  expr.writePropertyAccess(field.marshaledVar.identifierToken).source.writeVariableReference(dataVar);
+                };
+              },
+            })
+          });
         }
+      },
+      copyIntoUserVar: (userVar: CodeVariable, body: CodeStatementWriter, dataVarGetter: (expr: CodeExpressionWriter) => void) => {
+        self.asParent(() => {
+          for (const field of collectedCopyFields) {
+            let dataLeafGen: BapSubtreeGenerator | undefined = {
+              generateRead: () => {
+                return {
+                  type: 'cached',
+                  typeSpec: field.copyAsType,
+                  writeIntoExpression: () => {
+                    return (expr) => {
+                      if (field.marshalStructField) {
+                        dataVarGetter(expr.writePropertyAccess(field.marshalStructField.identifierToken).source);
+                      }
+                    };
+                  }
+                };
+              }
+            };
+            let userLeafGen: BapSubtreeGenerator | undefined = {
+              generateRead: () => {
+                return {
+                  type: 'cached',
+                  typeSpec: typeToBind,
+                  writeIntoExpression: () => {
+                    return (expr) => {
+                      expr.writeVariableReference(userVar);
+                    };
+                  }
+                };
+              }
+            };
+            for (const part of field.path) {
+              userLeafGen = new BapPropertyAccessExpressionVisitor().manual({ thisGen: userLeafGen, identifierName: part.identifier });
+            }
+            const assignGen = new BapAssignmentExpressionVisitor().manual({ refGen: userLeafGen, valueGen: dataLeafGen });
+            assignGen?.generateRead(context)?.writeIntoExpression?.(body)?.(body.writeExpressionStatement().expr);
+          }
+        });
       },
     });
   }
   for (const binding of collectedArrays) {
     const self = this;
+    const arrayCodeTypeSpec = CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken(basics.Array.libType!.identifier));
+    const marshalArrayCodeTypeSpec = arrayCodeTypeSpec.withTypeArgs([binding.elementBinding.marshalStructCodeTypeSpec]);
 
-    // TODO: Finish conversion!
-    // bindings.push({
-    //   type: 'array',
-    //   nameHint: binding.path.at(-1)?.identifier.nameHint ?? 'unknown',
-    //   location: bindings.length,
-    //   userType: binding.userType,
-    //   marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable } {
-    //     const extractedPropVar = body.scope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.tempType, BopIdentifierPrefix.Local, `bindArray_${binding.path.at(-1)?.identifier.nameHint}`);
-    //     let readExprLeaf = body.writeVariableDeclaration(extractedPropVar).initializer.writeExpression();
-    //     for (let i = binding.path.length - 1; i >= 0; --i) {
-    //       const pathPart = binding.path[i];
-    //       const propAccess = readExprLeaf.writePropertyAccess(pathPart.identifier);
-    //       readExprLeaf = propAccess.source;
-    //     }
-    //     readExprLeaf.writeVariableReference(dataVar);
-    //     if (binding.userType.structOf && !binding.userType.structOf.marshalFunc) {
-    //       const marshalFuncVar = writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Function, `marshal_${binding.userType.debugName}`)
-    //       const marshalFunc = writer.global.writeFunction(marshalFuncVar.identifierToken);
-    //       marshalFunc.touchedByCpu = true;
-    //       binding.userType.structOf.marshalFunc = marshalFuncVar;
-    //       binding.userType.structOf.marshalLength = binding.elementBinding.byteLength;
-    //       const funcScope = writer.global.scope.createChildScope(CodeScopeType.Function);
-    //       const valueVar = funcScope.allocateVariableIdentifier(binding.elementBinding.marshalStructType.codeTypeSpec, BopIdentifierPrefix.Local, 'value');
-    //       marshalFunc.addParam(binding.elementBinding.marshalStructType.codeTypeSpec, valueVar.identifierToken);
-    //       const bufferFillerVar = funcScope.allocateVariableIdentifier(basics.BufferFiller.codeTypeSpec, BopIdentifierPrefix.Local, 'bufferFiller');
-    //       marshalFunc.addParam(basics.BufferFiller.codeTypeSpec, bufferFillerVar.identifierToken);
-    //       const indexVar = funcScope.allocateVariableIdentifier(basics.int.codeTypeSpec, BopIdentifierPrefix.Local, 'index');
-    //       marshalFunc.addParam(basics.int.codeTypeSpec, indexVar.identifierToken);
-    //       const funcBody = marshalFunc.body;
-    //       const bufferFiller = new BufferFiller(context, bufferFillerVar);
-    //       const baseOffsetVar = funcBody.scope.allocateVariableIdentifier(CodeTypeSpec.intType, BopIdentifierPrefix.Local, 'baseOffset');
-    //       const baseOffset = funcBody.writeVariableDeclaration(baseOffsetVar).initializer.writeExpression().writeBinaryOperation(CodeBinaryOperator.Multiply);
-    //       baseOffset.lhs.writeVariableReference(indexVar);
-    //       baseOffset.rhs.writeLiteralInt(binding.elementBinding.byteLength);
-    //       bufferFiller.baseOffsetVar = baseOffsetVar;
-    //       binding.elementBinding.marshal(valueVar, bufferFiller, funcBody);
-    //     }
-    //     return { arrayVar: extractedPropVar };
-    //   },
-    //   unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoBopVar: BapScope): void {
-    //     const rootBlock = intoBopVar.lookupBlockOverride ?? self.globalBlock.createChildBlock(CodeScopeType.Local);
-    //     const fieldType = binding.userType;
-    //     let childBlock = rootBlock;
-    //     let leafVar;
-    //     for (const part of binding.path) {
-    //       const fieldName = part.identifier.nameHint;
-    //       let fieldVar = childBlock.identifierMap.get(fieldName);
-    //       if (!fieldVar) {
-    //         fieldVar = childBlock.mapIdentifier(fieldName, part.bopType.tempType, part.bopType);
-    //         fieldVar.requiresDirectAccess = true;
-    //         fieldVar.lookupBlockOverride = childBlock.createChildBlock(CodeScopeType.Local);
-    //       }
-    //       childBlock = fieldVar.lookupBlockOverride!;
-    //       leafVar = fieldVar;
-    //     }
-    //     if (leafVar) {
-    //       // Arrays must be accessed directly, because WSGL doesn't have a way to create aliases currently.
-    //       leafVar.requiresDirectAccess = true;
-    //       leafVar.result = dataVar;
-    //       {
-    //         const propName = 'length';
-    //         const propType = self.intType;
-    //         const propCopy = binding.marshalStructFields[propName];
-    //         if (self.verifyNotNulllike(propCopy, `${propName} was not bound correctly.`)) {
-    //           const proxyVar = body.scope.allocateVariableIdentifier(propType.tempType, BopIdentifierPrefix.Local, binding.path.map(f => f.identifier.nameHint).concat(propName).join('_'));
-    //           body.writeVariableDeclaration(proxyVar).initializer.writeExpression().writeVariableReference(propCopy);
-    //           const lengthProp = leafVar.lookupBlockOverride!.mapIdentifier(propName, propType.tempType, propType, false);
-    //           lengthProp.requiresDirectAccess = true;
-    //           lengthProp.result = proxyVar;
-    //         }
-    //       }
-    //     }
-    //     intoBopVar.requiresDirectAccess = true;
-    //     intoBopVar.lookupBlockOverride = rootBlock;
-    //   },
-    // });
+    bindings.push({
+      type: 'array',
+      nameHint: binding.path.at(-1)?.identifier ?? 'unknown',
+      location: bindings.length,
+      userType: binding.userType,
+      marshalArrayCodeTypeSpec: marshalArrayCodeTypeSpec,
+      marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable } {
+        return self.asParent(() => {
+          let leafGen: BapSubtreeGenerator | undefined = {
+            generateRead: () => {
+              return {
+                type: 'cached',
+                typeSpec: typeToBind,
+                writeIntoExpression: () => {
+                  return (expr) => {
+                    expr.writeVariableReference(dataVar);
+                  };
+                }
+              };
+            }
+          };
+          for (const part of binding.path) {
+            leafGen = new BapPropertyAccessExpressionVisitor().manual({ thisGen: leafGen, identifierName: part.identifier });
+          }
+          const leafValue = leafGen?.generateRead(context);
+          const leafWriter = leafValue?.writeIntoExpression?.(body);
+          const extractedPropVar = body.scope.allocateVariableIdentifier(binding.elementBinding.marshalStructCodeTypeSpec, BapIdentifierPrefix.Local, `bindArray_${binding.path.at(-1)?.identifier}`);
+          let readExprLeaf = body.writeVariableDeclaration(extractedPropVar).initializer.writeExpression();
+          leafWriter?.(readExprLeaf);
+          return { arrayVar: extractedPropVar };
+        });
+      },
+      unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
+        const debugName = binding.path.map(f => f.identifier).join('_');
+        unmarshalProxyPath(binding.path, intoContext, {
+          generateRead: () => ({
+            type: 'eval',
+            typeSpec: binding.userType,
+            writeIntoExpression: (prepare) => {
+              return (expr) => {
+                expr.writeVariableReference(dataVar);
+              };
+            },
+            writeIndexAccessIntoExpression: (prepare, indexValue) => {
+              console.log(prepare, indexValue);
+              const indexWriter = indexValue.writeIntoExpression?.(prepare);
+
+              const dataVarGetter = (expr: CodeExpressionWriter) => {
+                const accessExpr = expr.writeIndexAccess();
+                indexWriter?.(accessExpr.index);
+                accessExpr.source.writeVariableReference(dataVar);
+              };
+              const userVar = prepare.scope.allocateVariableIdentifier(binding.userType.codeTypeSpec, BapIdentifierPrefix.Field, debugName + '_access');
+              const userInit = prepare.writeVariableDeclaration(userVar);
+              binding.elementBinding.copyIntoUserVar(userVar, prepare, dataVarGetter);
+              return (expr) => {
+                expr.writeVariableReference(userVar);
+              };
+            },
+          }),
+        });
+      }
+    });
   }
   return { bindings };
 }

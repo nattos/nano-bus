@@ -1,6 +1,6 @@
 import { BapPrototypeScope } from '../bap-scope';
 import { BapTypeSpec } from '../bap-value';
-import { CodeVariable, CodeStatementWriter, CodeTypeSpec } from '../code-writer/code-writer';
+import { CodeVariable, CodeStatementWriter, CodeTypeSpec, CodeExpressionWriter } from '../code-writer/code-writer';
 import { BufferFiller } from './buffer-filler';
 
 
@@ -20,11 +20,13 @@ export interface GpuFixedBinding extends GpuBindingBase {
   byteLength: number;
   marshalStructCodeTypeSpec: CodeTypeSpec;
   marshal(dataVar: CodeVariable, bufferVars: BufferFiller, body: CodeStatementWriter): void;
+  copyIntoUserVar(userVar: CodeVariable, body: CodeStatementWriter, dataVarGetter: (expr: CodeExpressionWriter) => void): void;
 }
 /** A buffer that must be bound as its own uniform. */
 export interface GpuArrayBinding extends GpuBindingBase {
   type: 'array';
   userType: BapTypeSpec;
+  marshalArrayCodeTypeSpec: CodeTypeSpec;
   marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable; };
 }
 export interface GpuBindingBase {

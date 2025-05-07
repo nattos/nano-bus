@@ -12,9 +12,6 @@ import { resolveBapFields } from './bap-utils';
 import { GpuFixedBinding } from './gpu-binding/gpu-bindings';
 import { BufferFiller } from './gpu-binding/buffer-filler';
 
-// import { BopType, BopInternalTypeBuilder, BopFields, BopFunctionType, BopFunctionConcreteImplDetail, BopFunctionOf } from './bop-type';
-// import { BopBlock, BopIdentifierPrefix, BopGenericFunction, BopPropertyAccessor, BopVariable } from './bop-data';
-
 type StructureKey = string;
 
 export class BapTypes extends BapRootContextMixin {
@@ -57,7 +54,7 @@ export class BapTypes extends BapRootContextMixin {
 
     const basics = (context: BapGenerateContext) => {
       const resolveBasicType = (identifier: string) => {
-        return this.externTypesByIdentifier.get(identifier)?.generate(context) ?? this.primitiveTypeSpec(CodePrimitiveType.CompileError);
+        return this.externTypesByIdentifier.get(identifier)?.generate(context, { allowTypeParameters: true }) ?? this.primitiveTypeSpec(CodePrimitiveType.CompileError);
       };
       const resolveInternalType = (identifier: string): BapTypeSpec => {
         return {
@@ -80,6 +77,7 @@ export class BapTypes extends BapRootContextMixin {
         int: resolveBasicType('int'),
         uint: resolveBasicType('uint'),
 
+        Array: resolveBasicType('Array'),
         Texture: resolveBasicType('Texture'),
         MTLDevice: resolveInternalType('MTLDevice'),
         MTLFunction: resolveInternalType('MTLFunction'),
@@ -249,7 +247,6 @@ export class BapTypes extends BapRootContextMixin {
       }
 
       const parentCodeScope = context.globalWriter.global.scope;
-      // const parentBlock = this.globalBlock;
       const shortName = this.stringifyType(tsType, { short: true }).slice(0, 24);
 
       // Create a new type.
@@ -261,78 +258,9 @@ export class BapTypes extends BapRootContextMixin {
         return this.errorType;
       }
 
-      // Resolve types, that might contain type parameters.
-      // const resolveInnerTypeRef = (t: ts.Type): BopType|undefined => {
-      //   if (!t.symbol) {
-      //     return this.resolveType(t, { inBlock: thisBlock });
-      //   }
-      //   const typeRef = new BopReference(t.symbol.name, thisBlock);
-      //   this.resolve(typeRef);
-      //   if (typeRef.resolvedRef) {
-      //     return typeRef.resolvedRef?.typeResult;
-      //   }
-      //   return this.resolveType(t, { inBlock: thisBlock });
-      // };
-
-      // if (isTypeParameter) {
-      //   return resolveInnerTypeRef(tsType) ?? this.errorType;
-      // } else {
-      //   // type.isTypeParameter() and the return confuses the type checker.
-      //   tsType = tsType as ts.Type;
-      // }
-
       this.resolvingSet.set(tsType);
-      // const typeArgs: BopFields = [];
       try {
         // Lookup cached generic instantiations.
-        // let typeParamsKey = '';
-        // if (requiresGenericLookup) {
-        //   const baseTypeArgs = (genericBase as ts.InterfaceType).typeParameters ?? [];
-        //   const thisTypeArgs = (tsType as ts.TypeReference).typeArguments ?? [];
-        //   if (!this.check(baseTypeArgs.length === thisTypeArgs.length, `Mismatching type arguments.`)) {
-        //     return this.errorType;
-        //   }
-        //   for (let i = 0; i < baseTypeArgs.length; ++i) {
-        //     const baseType = baseTypeArgs[i];
-        //     const thisType = thisTypeArgs[i];
-        //     const resolved = resolveInnerTypeRef(thisType) ?? this.errorType;
-        //     typeArgs.push({
-        //       identifier: baseType.symbol.name,
-        //       type: resolved,
-        //     });
-        //   }
-        //   typeParamsKey = this.toStructureKey(typeArgs);
-
-        //   const genericInstances = this.typeGenericMap.get(genericBase!);
-        //   if (genericInstances) {
-        //     found = genericInstances.get(typeParamsKey);
-        //   } else {
-        //     found = undefined;
-        //   }
-        //   if (found) {
-        //     return found;
-        //   }
-        // }
-
-        // Lookup internal types.
-        // const sourceFile = tsGetSourceFileOfNode(tsType.symbol?.declarations?.at(0));
-        // const isInternalDeclaration = sourceFile?.fileName?.toLowerCase()?.endsWith('.d.ts') ?? false;
-        // if (isInternalDeclaration) {
-        //   // console.log(`     internal type mapping ========> ${type.symbol.name}`);
-        //   const internalGenericType = this.internalGenericTypeMap.get(tsType.symbol.name);
-        //   if (internalGenericType) {
-        //     const instantiatedType = internalGenericType(typeArgs);
-        //     let genericInstances = this.typeGenericMap.get(genericBase!);
-        //     if (!genericInstances) {
-        //       genericInstances = new Map();
-        //       this.typeGenericMap.set(genericBase!, genericInstances);
-        //     }
-        //     genericInstances.set(typeParamsKey, instantiatedType);
-        //     return instantiatedType;
-        //   }
-        //   return this.internalTypes.get(tsType.symbol.name) ?? this.errorType;
-        // }
-
         // Coalesce backing storage structs.
         const fields: BapFields = [];
         let constructorDecl: ts.ConstructorDeclaration|undefined;
@@ -380,50 +308,20 @@ export class BapTypes extends BapRootContextMixin {
           }
         }
 
-        // let casesIdentifierMap: Map<BopType, { identifier: string, index: number }>|undefined;
-        // let caseVariableIdentifier: string|undefined;
-        // if (tsType.isUnion()) {
-        //   casesIdentifierMap = new Map();
-
-        //   const innerTypes = tsType.types.map(t => this.resolveType(t));
-        //   let innerIndex = 0;
-        //   for (const innerType of innerTypes) {
-        //     if (casesIdentifierMap.has(innerType)) {
-        //       continue;
-        //     }
-        //     const identifier = `${innerType.debugName}`;
-        //     fields.push({ type: innerType, identifier });
-        //     casesIdentifierMap.set(innerType, { identifier, index: innerIndex });
-        //     innerIndex++;
-        //   }
-
-        //   caseVariableIdentifier = 'case';
-        //   fields.push({ type: this.intType, identifier: caseVariableIdentifier });
-        // }
-
         const structureKey = this.toStructureKey(fields);
         found = this.typesByStructureKey.get(structureKey);
         if (found) {
           return found;
         }
 
-        // let existingTypeInfo = this.typeCoalesceMap.get(structureKey);
-        // let fieldIdentifierMap: Map<string, { fieldVar: CodeVariable, fieldType: BopType }>;
         let fieldIdentifierMap: Map<string, { fieldVar: CodeVariable, fieldType: BapTypeSpec }>;
         let identifier: CodeVariable;
         let innerCodeScope: CodeScope;
         const methodFuncs: Array<() => void> = [];
-        // if (existingTypeInfo) {
-        //   identifier = existingTypeInfo.identifier;
-        //   innerScope = existingTypeInfo.innerScope;
-        //   fieldIdentifierMap = existingTypeInfo.fieldIdentifierMap;
-        // } else {
         {
           identifier = parentCodeScope.allocateVariableIdentifier(CodeTypeSpec.typeType, BapIdentifierPrefix.Struct, shortName);
           innerCodeScope = parentCodeScope.createChildScope(CodeScopeType.Class);
           fieldIdentifierMap = new Map();
-          // existingTypeInfo = { identifier, innerScope, fieldIdentifierMap };
-          // this.typeCoalesceMap.set(structureKey, existingTypeInfo);
           for (const property of fields) {
             const typeSpec = property.type;
             if (!this.verifyNotNulllike(typeSpec, `Field ${property.identifier} does not have a valid type.`)) {
@@ -466,8 +364,6 @@ export class BapTypes extends BapRootContextMixin {
           const marshalFunc = context.globalWriter.global.writeFunction(marshalFuncVar.identifierToken);
           marshalFunc.touchedByCpu = true;
 
-          // binding.userType.structOf.marshalFunc = marshalFuncVar;
-          // binding.userType.structOf.marshalLength = binding.elementBinding.byteLength;
           const codeTypeSpec = CodeTypeSpec.fromStruct(identifier.identifierToken);
           const funcScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Function);
           const valueVar = funcScope.allocateVariableIdentifier(codeTypeSpec, BapIdentifierPrefix.Local, 'value');
@@ -503,29 +399,8 @@ export class BapTypes extends BapRootContextMixin {
           };
         });
 
-        // for (const methodDecl of methodDecls) {
-        //   methodFuncs.push(() => {
-        //     const methodVar = this.declareFunction(methodDecl, newType, this.globalBlock, thisBlock, typeArgs);
-        //     if (!methodVar) {
-        //       return;
-        //     }
-        //   });
-        // }
-
-        // let unionOf: BopTypeUnion|undefined;
-        // if (casesIdentifierMap && caseVariableIdentifier) {
-        //   unionOf = new BopTypeUnion(
-        //     new Map(Array.from(casesIdentifierMap.entries()).map(([type, entry]) => [ type, { caseVar: fieldIdentifierMap.get(entry.identifier)!.fieldVar, caseIndex: entry.index } ])),
-        //     fieldIdentifierMap.get(caseVariableIdentifier)!.fieldVar,
-        //   );
-        // }
-
-        // const innerBlock = parentBlock.createChildBlock(CodeScopeType.Class);
-        // const typeVar = parentBlock.mapStorageIdentifier(shortName, this.typeType);
-
-        const prototypeScope = new BapPrototypeScope();// context.rootContext.withChildScope();
+        const prototypeScope = new BapPrototypeScope();
         const staticScope = new BapPrototypeScope();
-        // const fieldMap = new Map<string, BopVariable>();
         for (const property of fields) {
           const fieldIdentifier = fieldIdentifierMap.get(property.identifier)!;
 
@@ -565,73 +440,7 @@ export class BapTypes extends BapRootContextMixin {
               generateWrite: generateWrite,
             }),
           });
-          // const fieldVar = innerBlock.mapIdentifier(property.identifier, fieldIdentifier.fieldVar.typeSpec, fieldIdentifier.fieldType);
-          // fieldVar.result = fieldIdentifier.fieldVar;
-          // fieldMap.set(property.identifier, fieldVar);
         }
-
-        // const structOf = new BopStructType(
-        //   fields.map(f => fieldMap.get(f.identifier)!),
-        // );
-        // structOf.touchedByCpu = true;
-        // structOf.touchedByGpu = true;
-
-        // const newType = BopType.createPassByValue({
-        //     debugName: shortName,
-        //     valueType: CodeTypeSpec.fromStruct(identifier.identifierToken),
-        //     innerScope,
-        //     innerBlock,
-        //     structOf,
-        // });
-        // if (requiresGenericLookup) {
-        //   let genericInstances = this.typeGenericMap.get(genericBase!);
-        //   if (!genericInstances) {
-        //     genericInstances = new Map();
-        //     this.typeGenericMap.set(genericBase!, genericInstances);
-        //   }
-        //   genericInstances.set(typeParamsKey, newType);
-        // } else {
-        //   this.typeMap.set(tsType, newType);
-        // }
-        // typeVar.typeResult = newType;
-
-
-        // if (!constructorDecl && existingTypeInfo.defaultConstructor) {
-        //   // Use the existing default constructor.
-        //   const constructorIdentifier = existingTypeInfo.defaultConstructor;
-        //   innerBlock.mapIdentifier('constructor', constructorIdentifier.fieldVar.typeSpec, constructorIdentifier.fieldType).result = constructorIdentifier.fieldVar;
-        // } else {
-        //   if (!constructorDecl) {
-        //     // Generate a default constructor.
-        //     const constructorIdentifier = this.writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.functionType, BopIdentifierPrefix.Constructor, shortName);
-        //     const constructorFuncType = BopType.createFunctionType({
-        //       debugName: `${shortName}.constructor`,
-        //       innerScope: innerScope.createChildScope(CodeScopeType.Local),
-        //       innerBlock: innerBlock.createChildBlock(CodeScopeType.Local),
-        //       functionOf: new BopFunctionOf([new BopFunctionType(
-        //         [],
-        //         newType,
-        //         /* isMethod */ false,
-        //         0,
-        //       )]),
-        //     });
-        //     existingTypeInfo.defaultConstructor = { fieldVar: constructorIdentifier, fieldType: constructorFuncType };
-
-        //     innerBlock.mapIdentifier('constructor', constructorIdentifier.typeSpec, constructorFuncType).result = constructorIdentifier;
-        //     const constructorWriter = this.writer.global.writeFunction(constructorIdentifier.identifierToken);
-        //     constructorWriter.returnTypeSpec = newType.storageType;
-
-        //     const constructorBlock = this.globalBlock.createChildBlock(CodeScopeType.Function);
-        //     const constructorScope = this.writer.global.scope.createChildScope(CodeScopeType.Function);
-        //     const constructorOutVar = constructorScope.allocateVariableIdentifier(newType.storageType, BopIdentifierPrefix.Local, 'New');
-        //     constructorWriter.body.writeVariableDeclaration(constructorOutVar);
-        //     constructorWriter.body.writeReturnStatement().expr.writeVariableReference(constructorOutVar);
-        //   } else {
-        //     // Roll out the constructor implementation.
-        //     this.declareFunction(constructorDecl, newType, this.globalBlock, thisBlock, typeArgs);
-        //   }
-        // }
-        // methodFuncs.forEach(f => f());
 
         const newType: BapTypeSpec = {
           prototypeScope: prototypeScope,
@@ -661,7 +470,26 @@ export class BapTypes extends BapRootContextMixin {
     };
   }
 
-  private structureKeyIdMap = new Map<BapTypeSpec, number>;
+  private typeParameterTypeSpecMap = new Map<string, BapTypeSpec>();
+
+  makeTypeParameterTypeSpec(t: string): BapTypeSpec {
+    const oldTypeSpec = this.typeParameterTypeSpecMap.get(t);
+    if (oldTypeSpec) {
+      return oldTypeSpec;
+    }
+    const newTypeSpec: BapTypeSpec = {
+      prototypeScope: this.types.errorType.prototypeScope,
+      staticScope: this.types.errorType.staticScope,
+      typeParameters: [],
+      codeTypeSpec: this.types.errorType.codeTypeSpec,
+      isShadow: false,
+      debugName: t
+    };
+    this.typeParameterTypeSpecMap.set(t, newTypeSpec);
+    return newTypeSpec;
+  }
+
+  private structureKeyIdMap = new Map<BapTypeSpec, number>();
 
   toStructureKey(fields: BapFields) {
     let structureKey = '';

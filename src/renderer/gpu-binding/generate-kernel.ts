@@ -73,6 +73,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       kernelFunc.addAttribute({ key: CodeAttributeKey.GpuFunctionFragment });
       kernelFunc.addReturnAttribute({ key: CodeAttributeKey.GpuBindLocation, intValue: 0 });
     }
+    const prepare = kernelFunc.body;
 
     const childCodeScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Function);
     const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function } });
@@ -125,6 +126,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       marshalReturnCodeTypeSpec = CodeTypeSpec.fromStruct(vertexOutStructIdentifier);
     }
 
+
     const vertexStructIdentifier = context.globalWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Struct, `${functionName}_${stage}In`);
     const vertexStructWriter = context.globalWriter.global.writeStruct(vertexStructIdentifier);
     const vertexStructScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Class);
@@ -143,7 +145,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       marshalCodeTypeSpec: CodeTypeSpec;
       rawFieldAccessWriters: Array<{ marshalFieldVar: CodeVariable; accessor: () => BapSubtreeGenerator|undefined; }>;
     }|undefined;
-    let fixedBindings: { paramName: string; userType: BapTypeSpec; bindings: GpuFixedBinding; }|undefined;
+    // let fixedBindings: { paramName: string; userType: BapTypeSpec; bindings: GpuFixedBinding; }|undefined;
     for (const param of parameterEntries) {
       const paramType = this.types.type(param.type).generate(context);
       paramType?.marshal?.ensureMarshalable(this);
@@ -192,26 +194,6 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
             marshalFieldVar: rawField,
             accessor: () => accessor,
           });
-
-          // prototypeScope.declare(field.identifier, {
-          //   gen: (bindScope) => { return ({ generateRead: () => ({
-          //     type: 'eval',
-          //     typeSpec: shadowType,
-          //     writeIntoExpression: (prepare) => {
-          //       return (expr) => {
-          //         expr.writePropertyAccess(rawField).source.writeVariableReference(vertexUserVar);
-          //       };
-          //     },
-          //   }) }); },
-          //   genType: { generate: () => { return shadowType; } },
-          //   token: context.globalWriter.errorToken,
-          //   isField: true,
-          // });
-          // rewriterFuncs.push(funcWriter => {
-          //   const copyAssign = funcWriter.body.writeAssignmentStatement();
-          //   copyAssign.ref.writePropertyAccess(field.result!.identifierToken).source.writeVariableReference(mappedArgVar);
-          //   copyAssign.value.writePropertyAccess(rawField).source.writeVariableReference(rawArgVar.result!);
-          // });
           fieldIndex++;
         }
 
@@ -221,100 +203,50 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
           rawFieldAccessWriters,
         };
       } else if (paramIndex === threadIdParamIndex) {
-        // TODO: Fix uint.
-        // const argVar = functionBlock.mapTempIdentifier(param.identifier, this.uintType);
-        // params.push({ var: argVar, attribs: [ { key: CodeAttributeKey.GpuBindVertexIndex } ] });
       } else if (paramIndex === optionsParamIndex) {
         const optionsBopType = this.types.type(param.type).generate(context);
         if (!optionsBopType) {
           continue;
         }
-        // if (optionsBopType.structOf) {
-        //   // HACK!
-        //   optionsBopType.structOf.touchedByGpu = false;
-        // }
         optionsGpuBindings = makeGpuBindings.bind(this)(context, optionsBopType);
         console.log(optionsGpuBindings);
 
-        const fixed = (optionsGpuBindings.bindings.find(b => b.type === 'fixed') as GpuFixedBinding|undefined);
-        fixedBindings = fixed && {
-          paramName: param.identifier,
-          userType: optionsBopType,
-          bindings: fixed,
+        const prototypeScope = new BapPrototypeScope();
+        const staticScope = new BapPrototypeScope();
+        const shadowType: BapTypeSpec = {
+          prototypeScope: prototypeScope,
+          staticScope: staticScope,
+          typeParameters: [],
+          codeTypeSpec: CodeTypeSpec.compileErrorType,
+          isShadow: true,
+          debugName: param.identifier + '_shadow',
         };
-        // const argVar = functionBlock.mapTempIdentifier(param.identifier, paramType);
-        // argVar.requiresDirectAccess = true;
-        // for (const binding of optionsGpuBindings.bindings) {
-        //   if (binding.type === 'fixed') {
-        //     const marshalParamType = binding.marshalStructType;
-        //     const uniformVar = this.writer.global.scope.allocateVariableIdentifier(marshalParamType.storageType, BopIdentifierPrefix.Local, param.identifier);
-        //     rewriterFuncs.push((funcWriter) => {
-        //       // argVar.result = funcWriter.body.scope.allocateVariableIdentifier(CodeTypeSpec.boolType, 'asdf', 'asdf');
-        //       binding.unmarshal(uniformVar, funcWriter.body, argVar);
-        //     });
+        childContext.scope.declare(param.identifier, {
+          type: 'cached',
+          typeSpec: shadowType,
+        });
 
-        //     const varWriter = this.writer.global.writeVariableDeclaration(uniformVar);
-        //     varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
-        //     varWriter.attribs.push({ key: CodeAttributeKey.GpuVarUniform });
-
-        //     rewriterFuncs.push((funcWriter) => {
-        //       const placeholderAssign = funcWriter.body.writeAssignmentStatement();
-        //       placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
-        //       placeholderAssign.value.writeIdentifier(uniformVar.identifierToken);
-        //     });
-        //   } else if (binding.type === 'array') {
-        //     const userElementType = binding.userType;
-        //     const userParamType = userElementType.storageType.toArray();
-        //     const uniformVar = this.writer.global.scope.allocateVariableIdentifier(userParamType, BopIdentifierPrefix.Local, `${param.identifier}_${binding.nameHint}`);
-        //     rewriterFuncs.push((funcWriter) => {
-        //       binding.unmarshal(uniformVar, funcWriter.body, argVar);
-        //     });
-
-        //     const varWriter = this.writer.global.writeVariableDeclaration(uniformVar);
-        //     varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
-        //     varWriter.attribs.push({ key: CodeAttributeKey.GpuVarReadWriteArray });
-
-        //     rewriterFuncs.push((funcWriter) => {
-        //       const placeholderAssign = funcWriter.body.writeAssignmentStatement();
-        //       placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
-        //       placeholderAssign.value.writeVariableReferenceReference(uniformVar.identifierToken);
-        //     });
-        //   } else if (binding.type === 'texture') {
-        //     const userParamType = this.libTypes.Texture.tempType;
-        //     const uniformVar = this.writer.global.scope.allocateVariableIdentifier(userParamType, BopIdentifierPrefix.Local, `${param.identifier}_${binding.nameHint}`);
-        //     rewriterFuncs.push((funcWriter) => {
-        //       binding.unmarshal(uniformVar, funcWriter.body, argVar);
-        //     });
-
-        //     const varWriter = this.writer.global.writeVariableDeclaration(uniformVar);
-        //     varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
-        //     // varWriter.attribs.push({ key: CodeAttributeKey.GpuVarReadWriteArray });
-
-        //     rewriterFuncs.push((funcWriter) => {
-        //       const placeholderAssign = funcWriter.body.writeAssignmentStatement();
-        //       placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
-        //       placeholderAssign.value.writeVariableReference(uniformVar.identifierToken);
-        //     });
-        //   }
-        // }
-        // rewriterFuncs.push((funcWriter) => {
-        //   const placeholderAssign = funcWriter.body.writeAssignmentStatement();
-        //   placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
-        //   placeholderAssign.value.writeVariableReferenceReference(this.writer.makeInternalToken('BopLib_DebugIns_ValuesArray'));
-        // });
-        // rewriterFuncs.push((funcWriter) => {
-        //   const placeholderAssign = funcWriter.body.writeAssignmentStatement();
-        //   placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
-        //   placeholderAssign.value.writeVariableReferenceReference(this.writer.makeInternalToken('BopLib_DebugOuts_Metadata'));
-        // });
-        // // GRRR webgpu
-        // if (!isGpuVertexFunc) {
-        //   rewriterFuncs.push((funcWriter) => {
-        //     const placeholderAssign = funcWriter.body.writeAssignmentStatement();
-        //     placeholderAssign.ref.writeIdentifier(this.underscoreIdentifier);
-        //     placeholderAssign.value.writeVariableReferenceReference(this.writer.makeInternalToken('BopLib_DebugOuts_ValuesArray'));
-        //   });
-        // }
+        for (const binding of optionsGpuBindings.bindings) {
+          if (binding.type === 'fixed') {
+            const uniformVar = context.globalWriter.global.scope.allocateVariableIdentifier(binding.marshalStructCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'uniform');
+            const varWriter = context.globalWriter.global.writeVariableDeclaration(uniformVar);
+            varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
+            varWriter.attribs.push({ key: CodeAttributeKey.GpuVarUniform });
+            const placeholderAssign = prepare.writeAssignmentStatement();
+            placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
+            placeholderAssign.value.writeVariableReferenceReference(uniformVar.identifierToken);
+            binding.unmarshal(uniformVar, kernelFunc.body, prototypeScope);
+          } else if (binding.type === 'array') {
+            const uniformVar = context.globalWriter.global.scope.allocateVariableIdentifier(binding.marshalArrayCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'uniform');
+            const varWriter = context.globalWriter.global.writeVariableDeclaration(uniformVar);
+            varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
+            varWriter.attribs.push({ key: CodeAttributeKey.GpuVarReadWriteArray });
+            const placeholderAssign = prepare.writeAssignmentStatement();
+            placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
+            placeholderAssign.value.writeVariableReferenceReference(uniformVar.identifierToken);
+            binding.unmarshal(uniformVar, kernelFunc.body, prototypeScope);
+          }
+        }
       }
       paramIndex++;
     }
@@ -328,15 +260,12 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
 
 
 
-    const prepare = kernelFunc.body;
-
     const kernelParams = [];
     const vertexVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.marshalCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'vertex');
     const vertexUserVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.userType.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'vertex');
     const threadIdVar = childCodeScope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken('BopLib::uint')), BapIdentifierPrefix.Local, 'threadId');
-    const fixedVar = context.globalWriter.global.scope.allocateVariableIdentifier(fixedBindings?.bindings.marshalStructCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'fixed');
     if (vertexBindings) {
-      kernelParams.push({ index: vertexParamIndex, typeSpec: vertexVar.typeSpec, codeVar: vertexVar, isUniform: false, attribs: [] });
+      kernelParams.push({ index: vertexParamIndex, typeSpec: vertexVar.typeSpec, codeVar: vertexVar, attribs: [] });
       const vertexUserInit = prepare.writeVariableDeclaration(vertexUserVar);
       for (const prop of vertexBindings.rawFieldAccessWriters) {
         const fieldInitExpr = vertexUserInit.initializer.writeAssignStructField(prop.marshalFieldVar.identifierToken).value;
@@ -347,42 +276,16 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       index: threadIdParamIndex,
       typeSpec: threadIdVar.typeSpec,
       codeVar: threadIdVar,
-      isUniform: false,
       attribs: [ { key: CodeAttributeKey.GpuBindVertexIndex } ],
     });
-    if (fixedBindings) {
-      kernelParams.push({ index: optionsParamIndex, typeSpec: fixedVar.typeSpec, codeVar: fixedVar, isUniform: true, attribs: [ { key: bindingLocation, intValue: 0 } ] });
-
-      const prototypeScope = new BapPrototypeScope();
-      const staticScope = new BapPrototypeScope();
-      const shadowType: BapTypeSpec = {
-        prototypeScope: prototypeScope,
-        staticScope: staticScope,
-        typeParameters: [],
-        codeTypeSpec: fixedBindings.userType.codeTypeSpec,
-        isShadow: true,
-        debugName: fixedBindings.userType.debugName + '_shadow',
-      };
-      childContext.scope.declare(fixedBindings.paramName, {
-        type: 'cached',
-        typeSpec: shadowType,
-      });
-
-      fixedBindings.bindings.unmarshal(fixedVar, kernelFunc.body, prototypeScope);
-    }
     kernelParams.sort((a, b) => a.index - b.index);
     for (const kernelParam of kernelParams) {
       if (kernelParam.index < 0) {
         continue;
       }
-      if (kernelParam.isUniform) {
-        const varWriter = context.globalWriter.global.writeVariableDeclaration(kernelParam.codeVar);
-        varWriter.attribs.push(...kernelParam.attribs);
-        varWriter.attribs.push({ key: CodeAttributeKey.GpuVarUniform });
-      } else {
-        kernelFunc.addParam(kernelParam.typeSpec, kernelParam.codeVar.identifierToken, { attribs: kernelParam.attribs });
-      }
+      kernelFunc.addParam(kernelParam.typeSpec, kernelParam.codeVar.identifierToken, { attribs: kernelParam.attribs });
     }
+
 
 
     const returnVarWriter = returnVarGen?.generateRead(childContext);

@@ -77,26 +77,9 @@ function translateProgram(init: {
   program: ts.Program,
   sourceRoot: ts.SourceFile,
 }) {
-  // const tc: ts.TypeChecker;
   const writer = new CodeWriter();
-  // // const globalBlock: BopBlock;
-  // const blockWriter: CodeStatementWriter;
-  // const initFuncIdentifier: CodeNamedToken;
-  // const initFuncBlockWriter: CodeStatementWriter;
-  // const runFuncIdentifier: CodeNamedToken;
-  // const runFuncBlockWriter: CodeStatementWriter;
-  // // block: BopBlock;
-  // // const scopeReturnType: BopType;
-  // // asAssignableRef = false;
-  // // private unrolledBlocks?: BopStage[];
-
-  // const instanceVarsIdentifier: CodeVariable;
-  // const instanceBlockWriter: CodeStructWriter;
-  // const instanceScope: CodeScope;
   const prepareFuncs: CodeVariable[] = [];
   const runFuncs: CodeVariable[] = [];
-
-
 
   const tc = init.program.getTypeChecker();
   // sourceRoot.statements.forEach(this.printRec.bind(this));
@@ -111,75 +94,6 @@ function translateProgram(init: {
   runFunc.touchedByCpu = true;
   const blockWriter = runFunc.body;
   const runFuncBlockWriter = runFunc.body;
-
-  // globalBlock = BopBlock.createGlobalBlock();
-  // block = globalBlock;
-
-  // const instanceScope = writer.global.scope.createChildScope(CodeScopeType.Class);
-  // const instanceVarsTypeIdentifier = writer.makeInternalToken('InstanceVars2');
-  // const instanceBlockWriter = writer.global.writeStruct(instanceVarsTypeIdentifier);
-  // instanceBlockWriter.isInternalOnly = true;
-  // instanceBlockWriter.touchedByGpu = false;
-  // const instanceVarsToken = writer.makeInternalToken('instanceVars2');
-  // const instanceVarsIdentifier = writer.global.scope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(instanceVarsTypeIdentifier), BopIdentifierPrefix.Local, 'instanceVars', { fixedIdentifierToken: instanceVarsToken });
-
-    // // Map intrinsic types.
-    // this.underscoreIdentifier = this.writer.makeInternalToken('_');
-    // this.errorType = this.createPrimitiveType(CodeTypeSpec.compileErrorType);
-    // this.wouldBeAnyType = this.createPrimitiveType(CodeTypeSpec.compileErrorType);
-    // this.functionType = this.createPrimitiveType(CodeTypeSpec.functionType);
-    // this.typeType = this.createPrimitiveType(CodeTypeSpec.typeType);
-    // this.typeMap.set(this.tc.getVoidType(), this.voidType = this.createPrimitiveType(CodeTypeSpec.voidType));
-    // this.typeMap.set(this.tc.getBooleanType(), this.booleanType = this.createPrimitiveType(CodeTypeSpec.boolType));
-    // this.undefinedType = this.createInternalType({ identifier: 'UndefinedType', anonymous: true }).type;
-    // this.undefinedConstant = this.createInternalConstant({ identifier: 'undefined', internalIdentifier: 'kUndefinedValue', type: this.undefinedType });
-    // this.privateTypes = {
-    //   MTLDevice: this.createInternalType({ identifier: 'id<MTLDevice>', anonymous: true }).type,
-    //   MTLFunction: this.createInternalType({ identifier: 'id<MTLFunction>', anonymous: true }).type,
-    //   MTLRenderPipelineDescriptor: this.createInternalType({ identifier: 'MTLRenderPipelineDescriptor*', anonymous: true }).type,
-    //   MTLRenderPassDescriptor: this.createInternalType({ identifier: 'MTLRenderPassDescriptor*', anonymous: true }).type,
-    //   MTLRenderCommandEncoder: this.createInternalType({ identifier: 'id<MTLRenderCommandEncoder>', anonymous: true }).type,
-    //   MTLPrimitiveTypeTriangle: this.createInternalType({ identifier: 'MTLPrimitiveTypeTriangle', anonymous: true }).type,
-    //   MTLComputePipelineDescriptor: this.createInternalType({ identifier: 'MTLComputePipelineDescriptor*', anonymous: true }).type,
-    //   MTLComputePassDescriptor: this.createInternalType({ identifier: 'MTLComputePassDescriptor*', anonymous: true }).type,
-    //   MTLComputeCommandEncoder: this.createInternalType({ identifier: 'id<MTLComputeCommandEncoder>', anonymous: true }).type,
-    //   BufferFiller: this.createInternalType({ identifier: 'BufferFiller', anonymous: true }).type,
-    // };
-
-
-    // const { libTypes, newBopTypeMap } = loadBopLib(this);
-
-    // this.intType = newBopTypeMap.get('int')!.bopType!;
-    // this.floatType = newBopTypeMap.get('float')!.bopType!;
-    // this.float4Type = newBopTypeMap.get('float4')!.bopType!;
-    // this.libTypes = {
-    //   Texture: newBopTypeMap.get('Texture')!.bopType!,
-    // };
-    // // this.typeMap.set(this.tc.getNumberType(), this.intType); // TODO: FIX!!!
-
-    // for (const type of libTypes.values()) {
-    //   const typeArgs = type.typeParameters.map(t => utils.upcast({ name: t, typeArgs: [] }));
-    //   const typeName = toStringResolvedType({ name: type.name, typeArgs });
-    //   for (const prop of type.properties) {
-    //     const propType = prop.type(typeArgs);
-    //     // console.log(`${typeName}.${prop.name}: ${toStringResolvedType(propType)}`);
-    //   }
-    //   for (const method of type.methods) {
-    //     const methodTypeArgs = method.typeParameters.map(t => utils.upcast({ name: t, typeArgs: [] }));
-    //     let methodName = method.name;
-    //     if (methodTypeArgs.length > 0) {
-    //       methodName += `<${methodTypeArgs.map(toStringResolvedType).join(', ')}>`;
-    //     }
-    //     // console.log(`${typeName}.${methodName}(${method.parameters.map(p => `${p.name}: ${toStringResolvedType(p.type(typeArgs, methodTypeArgs))}`).join(', ')}): ???`);
-    //   }
-    // }
-    // // console.log(Array.from(libTypes.values()));
-
-    // this.scopeReturnType = this.errorType;
-
-
-
-
 
   let types: BapTypes;
   const rootContext: BapVisitorRootContext = {
@@ -202,15 +116,6 @@ function translateProgram(init: {
   for (const runFunc of runFuncs) {
     runFuncBlockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(runFunc.identifierToken);
   }
-
-  // utils.visitRec(
-  //     this.bopFunctionConcreteImpls.filter(impl => impl.touchedByCpu),
-  //     node => Array.from(node.references),
-  //     node => node.touchedByCpu = true);
-  // utils.visitRec(
-  //     this.bopFunctionConcreteImpls.filter(impl => impl.touchedByGpu),
-  //     node => Array.from(node.references),
-  //     node => node.touchedByGpu = true);
 
   const platform = CodeWriterPlatform.WebGPU;
   const { code: cpuCode, translatedTokens } = writer.getOuterCode(false, platform, { translateTokens: [ initFuncIdentifier, runFuncIdentifier ] });
