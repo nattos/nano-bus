@@ -179,6 +179,8 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
 
 
   const bindings: GpuBinding[] = [];
+  // HACK!!! Forward fixed data variable to array bindings.
+  let fixedDataVar: CodeVariable|undefined = undefined;
   if (collectedCopyFields.length > 0) {
     let byteLengthAcc = 0;
     collectedCopyFields.forEach(f => byteLengthAcc += f.copyAsType.libType?.marshalSize ?? 4);
@@ -199,6 +201,10 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
       marshalStructWriter.body.writeField(rawField.identifierToken, bopType.codeTypeSpec, { attribs: [{ key: bindingLocation, intValue: fieldIndex }] });
       unmarshalFields.push({ marshaledVar: rawField, type: bopType, path: field.path });
       field.marshalStructField = rawField;
+
+      if (field.forBindArray) {
+        field.forBindArray.entry.marshalStructFields[field.forBindArray.field] = rawField;
+      }
       fieldIndex++;
     }
 
@@ -240,6 +246,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
         });
       },
       unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
+        fixedDataVar = dataVar;
         for (const field of unmarshalFields) {
           unmarshalProxyPath(field.path, intoContext, {
             generateRead: () => ({
@@ -334,10 +341,22 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
       },
       unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
         const debugName = binding.path.map(f => f.identifier).join('_');
+
+        const prototypeScope = new BapPrototypeScope();
+        const staticScope = new BapPrototypeScope();
+        const shadowType: BapTypeSpec = {
+          prototypeScope: prototypeScope,
+          staticScope: staticScope,
+          typeParameters: [],
+          codeTypeSpec: binding.userType.codeTypeSpec,
+          isShadow: true,
+          debugName: binding.userType.debugName + '_shadow',
+        };
+
         unmarshalProxyPath(binding.path, intoContext, {
           generateRead: () => ({
             type: 'eval',
-            typeSpec: binding.userType,
+            typeSpec: shadowType,
             writeIntoExpression: (prepare) => {
               return (expr) => {
                 expr.writeVariableReference(dataVar);
@@ -361,6 +380,29 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
             },
           }),
         });
+
+        const lengthVar = binding.marshalStructFields.length;
+        if (lengthVar && fixedDataVar) {
+          const thisFixedDataVar = fixedDataVar;
+          prototypeScope.declare('length', {
+            gen: (bindScope) => {
+              return ({
+                generateRead: () => ({
+                  type: 'eval',
+                  typeSpec: basics.int,
+                  writeIntoExpression: (prepare) => {
+                    return (expr) => {
+                      expr.writePropertyAccess(lengthVar.identifierToken).source.writeVariableReference(thisFixedDataVar);
+                    };
+                  },
+                })
+              });
+            },
+            genType: { generate: () => basics.int },
+            token: context.globalWriter.errorToken,
+            isField: true,
+          });
+        }
       }
     });
   }
