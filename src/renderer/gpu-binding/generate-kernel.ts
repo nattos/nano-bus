@@ -245,6 +245,24 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
             placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
             placeholderAssign.value.writeVariableReferenceReference(uniformVar.identifierToken);
             binding.unmarshal(uniformVar, kernelFunc.body, prototypeScope);
+          } else if (binding.type === 'texture') {
+            const textureVar = context.globalWriter.global.scope.allocateVariableIdentifier(basics.Texture.codeTypeSpec, BapIdentifierPrefix.Local, 'uniform');
+            const samplerVar = context.globalWriter.global.scope.allocateVariableIdentifier(basics.TextureSampler.codeTypeSpec, BapIdentifierPrefix.Local, 'uniform');
+            {
+              const varWriter = context.globalWriter.global.writeVariableDeclaration(textureVar);
+              varWriter.attribs.push({ key: bindingLocation, intValue: binding.location });
+              const placeholderAssign = prepare.writeAssignmentStatement();
+              placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
+              placeholderAssign.value.writeVariableReference(textureVar.identifierToken);
+            }
+            {
+              const varWriter = context.globalWriter.global.writeVariableDeclaration(samplerVar);
+              varWriter.attribs.push({ key: bindingLocation, intValue: binding.location + 1 });
+              const placeholderAssign = prepare.writeAssignmentStatement();
+              placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
+              placeholderAssign.value.writeVariableReference(samplerVar.identifierToken);
+            }
+            binding.unmarshal(textureVar, samplerVar, kernelFunc.body, prototypeScope);
           }
         }
       }

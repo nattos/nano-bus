@@ -179,6 +179,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
 
 
   const bindings: GpuBinding[] = [];
+  let nextBindingLocation = 0;
   // HACK!!! Forward fixed data variable to array bindings.
   let fixedDataVar: CodeVariable|undefined = undefined;
   if (collectedCopyFields.length > 0) {
@@ -214,7 +215,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     bindings.push({
       type: 'fixed',
       nameHint: collectedCopyFields.map(f => f.path.at(-1)?.identifier ?? 'unknown').join('_'),
-      location: bindings.length,
+      location: nextBindingLocation++,
       byteLength: byteLength,
       marshalStructCodeTypeSpec: marshalStructCodeTypeSpec,
       marshal(dataVar: CodeVariable, bufferFiller: BufferFiller, body: CodeStatementWriter): void {
@@ -310,7 +311,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     bindings.push({
       type: 'array',
       nameHint: binding.path.at(-1)?.identifier ?? 'unknown',
-      location: bindings.length,
+      location: nextBindingLocation++,
       userType: binding.userType,
       marshalArrayCodeTypeSpec: marshalArrayCodeTypeSpec,
       marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable } {
@@ -406,5 +407,117 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
       }
     });
   }
+  for (const binding of collectedTextures) {
+    const self = this;
+
+    const debugName = binding.path.at(-1)?.identifier ?? typeToBind.debugName;
+
+    const textureBindingLocation = nextBindingLocation++;
+    const samplerBindingLocation = nextBindingLocation++;
+
+    const instanceScope = context.instanceVars.scope;
+    const instanceBlockWriter = context.instanceVars.blockWriter;
+    const instanceVarsIdentifier = context.instanceVars.codeVar.identifierToken;
+
+    const samplerInstanceVar = instanceScope.allocateVariableIdentifier(basics.TextureSampler.codeTypeSpec, BapIdentifierPrefix.Field, `${debugName}_sampler`);
+    instanceBlockWriter.body.writeField(samplerInstanceVar.identifierToken, samplerInstanceVar.typeSpec);
+
+    bindings.push({
+      type: 'texture',
+      nameHint: binding.path.at(-1)?.identifier ?? 'unknown',
+      location: textureBindingLocation,
+      marshal(dataVar: CodeVariable, body: CodeStatementWriter): { textureVar: CodeVariable; samplerVar: CodeVariable; } {
+        return self.asParent(() => {
+          let leafGen: BapSubtreeGenerator | undefined = {
+            generateRead: () => {
+              return {
+                type: 'cached',
+                typeSpec: typeToBind,
+                writeIntoExpression: () => {
+                  return (expr) => {
+                    expr.writeVariableReference(dataVar);
+                  };
+                }
+              };
+            }
+          };
+          for (const part of binding.path) {
+            leafGen = new BapPropertyAccessExpressionVisitor().manual({ thisGen: leafGen, identifierName: part.identifier });
+          }
+          const leafValue = leafGen?.generateRead(context);
+          const leafWriter = leafValue?.writeIntoExpression?.(body);
+          const extractedPropVar = body.scope.allocateVariableIdentifier(basics.Texture.codeTypeSpec, BapIdentifierPrefix.Local, `bindTexture_${debugName}`);
+          let readExprLeaf = body.writeVariableDeclaration(extractedPropVar).initializer.writeExpression();
+
+          const samplerVar = body.scope.allocateVariableIdentifier(basics.Texture.codeTypeSpec, BapIdentifierPrefix.Local, `bindTextureSampler_${debugName}`);
+          body.writeVariableDeclaration(samplerVar).initializer.writeExpression().writePropertyAccess(samplerInstanceVar.identifierToken).source.writeVariableReference(instanceVarsIdentifier);
+
+          leafWriter?.(readExprLeaf);
+          return { textureVar: extractedPropVar, samplerVar: samplerVar };
+        });
+      },
+      unmarshal(textureDataVar: CodeVariable, samplerDataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void {
+        const debugName = binding.path.map(f => f.identifier).join('_');
+
+        const prototypeScope = new BapPrototypeScope();
+        const staticScope = new BapPrototypeScope();
+        const shadowType: BapTypeSpec = {
+          prototypeScope: prototypeScope,
+          staticScope: staticScope,
+          typeParameters: [],
+          codeTypeSpec: basics.Texture.codeTypeSpec,
+          isShadow: true,
+          debugName: basics.Texture.debugName + '_shadow',
+        };
+
+        unmarshalProxyPath(binding.path, intoContext, {
+          generateRead: () => ({
+            type: 'eval',
+            typeSpec: shadowType,
+            writeIntoExpression: (prepare) => {
+              return (expr) => {
+                expr.writeVariableReference(textureDataVar);
+              };
+            },
+          }),
+        });
+
+        // const lengthVar = binding.marshalStructFields.length;
+        // if (lengthVar && fixedDataVar) {
+        //   const thisFixedDataVar = fixedDataVar;
+        //   prototypeScope.declare('length', {
+        //     gen: (bindScope) => {
+        //       return ({
+        //         generateRead: () => ({
+        //           type: 'eval',
+        //           typeSpec: basics.int,
+        //           writeIntoExpression: (prepare) => {
+        //             return (expr) => {
+        //               expr.writePropertyAccess(lengthVar.identifierToken).source.writeVariableReference(thisFixedDataVar);
+        //             };
+        //           },
+        //         })
+        //       });
+        //     },
+        //     genType: { generate: () => basics.int },
+        //     token: context.globalWriter.errorToken,
+        //     isField: true,
+        //   });
+        // }
+      },
+      writeIntoInitFunc: (body: CodeStatementWriter) => {
+        const samplerAssign = body.writeAssignmentStatement();
+        samplerAssign.ref.writePropertyAccess(samplerInstanceVar.identifierToken).source.writeVariableReference(instanceVarsIdentifier);
+        samplerAssign.value.writeStaticFunctionCall(writer.makeInternalToken('MTLCreateSampler'));
+      },
+    });
+  }
+
+  if (collectedArrays.length > 0 || collectedTextures.length > 0) {
+    if (typeToBind.marshal) {
+      typeToBind.marshal.blittable = false;
+    }
+  }
+
   return { bindings };
 }

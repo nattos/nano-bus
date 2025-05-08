@@ -396,7 +396,7 @@ class BopTexture {
   }
 
   get requiresGpuUpdate() {
-    return this.texture && this.texture.width === this.width && this.texture.height === this.height;
+    return !(this.texture && this.texture.width === this.width && this.texture.height === this.height);
   }
 
   resize(width: number, height: number, channels: number = 4) {
@@ -414,7 +414,7 @@ class BopTexture {
       return;
     }
 
-    if (this.requiresGpuUpdate) {
+    if (!this.requiresGpuUpdate) {
       return;
     }
 
@@ -426,6 +426,39 @@ class BopTexture {
     });
     this.textureView = this.texture.createView()!;
   }
+}
+class BopTextureSampler {
+  private sampler?: GPUSampler;
+
+  get requiresGpuUpdate() {
+    return !this.sampler;
+  }
+
+  ensureGpu() {
+    const device = SharedMTLInternals().device;
+    if (!device) {
+      return;
+    }
+
+    if (!this.requiresGpuUpdate) {
+      return;
+    }
+
+    this.sampler = device.createSampler({
+      magFilter: 'linear',
+      minFilter: 'linear',
+      addressModeU: 'clamp-to-edge',
+      addressModeV: 'clamp-to-edge',
+      addressModeW: 'clamp-to-edge',
+    });
+  }
+
+  getSampler(): GPUSampler|undefined {
+    return this.sampler;
+  }
+}
+class BopTextureEntry {
+  constructor(readonly texture: BopTexture, readonly sampler: BopTextureSampler) {}
 }
 
 
@@ -762,6 +795,10 @@ function GetTrackTextureFormat(): unknown {
   return {};
 }
 
+function MTLCreateSampler() {
+  return new BopTextureSampler();
+}
+
 
 
 
@@ -1078,8 +1115,8 @@ class MTLRenderCommandEncoder {
   renderPipelineState = InvalidMTLRenderPipelineState();
 
   readonly vertexAttributeBytes: Array<BopArray<unknown>|undefined> = [];
-  readonly vertexBytes: Array<ArrayBuffer|BopArray<unknown>|undefined> = [];
-  readonly fragmentBytes: Array<ArrayBuffer|BopArray<unknown>|undefined> = [];
+  readonly vertexBytes: Array<ArrayBuffer|BopArray<unknown>|BopTextureEntry|undefined> = [];
+  readonly fragmentBytes: Array<ArrayBuffer|BopArray<unknown>|BopTextureEntry|undefined> = [];
 
   private readonly preready;
   private readonly ready;
@@ -1145,11 +1182,11 @@ class MTLRenderCommandEncoder {
     this.vertexAttributeBytes[index] = buffer;
   }
 
-  setVertexBytes(buffer: ArrayBuffer|BopArray<unknown>, index: number) {
+  setVertexBytes(buffer: ArrayBuffer|BopArray<unknown>|BopTextureEntry, index: number) {
     this.vertexBytes[index] = buffer;
   }
 
-  setFragmentBytes(buffer: ArrayBuffer|BopArray<unknown>, index: number) {
+  setFragmentBytes(buffer: ArrayBuffer|BopArray<unknown>|BopTextureEntry, index: number) {
     this.fragmentBytes[index] = buffer;
   }
 
@@ -1183,7 +1220,7 @@ class MTLComputeCommandEncoder {
   label = 'Unknown Encoder';
   pipelineState = InvalidMTLComputePipelineState();
 
-  dataBytes: Array<ArrayBuffer|BopArray<unknown>|BopTexture|undefined> = [];
+  dataBytes: Array<ArrayBuffer|BopArray<unknown>|BopTextureEntry|undefined> = [];
 
   readonly ready;
   private readonly queue = new utils.OperationQueue();
@@ -1223,7 +1260,7 @@ class MTLComputeCommandEncoder {
     this.queue.push(() => this.ready);
   }
 
-  setBytes(buffer: ArrayBuffer|BopArray<unknown>|BopTexture, index: number) {
+  setBytes(buffer: ArrayBuffer|BopArray<unknown>|BopTextureEntry, index: number) {
     this.dataBytes[index] = buffer;
   }
 
@@ -1274,6 +1311,12 @@ function EncoderSetVertexBuffer(encoder: MTLRenderCommandEncoder, buffer: BopArr
   buffer.getImpl().ensureGpuBuffer();
   encoder.setVertexBytes(buffer, index);
 }
+function EncoderSetVertexTexture(encoder: MTLRenderCommandEncoder, texture: BopTexture, sampler: BopTextureSampler, index: number) {
+  // console.log('EncoderSetVertexBuffer', encoder, buffer, offset, index);
+  texture.ensureGpuBuffer();
+  sampler.ensureGpu();
+  encoder.setVertexBytes(new BopTextureEntry(texture, sampler), index);
+}
 function EncoderSetFragmentBytes(encoder: MTLRenderCommandEncoder, buffer: ArrayBuffer, offset: number, index: number) {
   // console.log('EncoderSetFragmentBytes', encoder, buffer, offset, index);
   encoder.setFragmentBytes(buffer, index);
@@ -1282,6 +1325,12 @@ function EncoderSetFragmentBuffer(encoder: MTLRenderCommandEncoder, buffer: BopA
   // console.log('EncoderSetFragmentBuffer', encoder, buffer, offset, index);
   buffer.getImpl().ensureGpuBuffer();
   encoder.setFragmentBytes(buffer, index);
+}
+function EncoderSetFragmentTexture(encoder: MTLRenderCommandEncoder, texture: BopTexture, sampler: BopTextureSampler, index: number) {
+  // console.log('EncoderSetFragmentTexture', encoder, buffer, offset, index);
+  texture.ensureGpuBuffer();
+  sampler.ensureGpu();
+  encoder.setFragmentBytes(new BopTextureEntry(texture, sampler), index);
 }
 function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimitiveType, offset: number, count: number) {
   // console.log('EncodeDrawPrimitives', encoder, type, offset, count);
@@ -1302,54 +1351,13 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
     }
 
     // Bind additional vertex and fragment shader buffers.
-    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|BopArray<unknown>|undefined>) => {
-      const bindGroupEntries: GPUBindGroupEntry[] = [];
-      for (let index = 0; index < buffers.length; ++index) {
-        const byteArray = buffers[index];
-        let resource: GPUBindingResource|undefined;
-        if (byteArray instanceof BopArray) {
-          const bufferBuffer = byteArray.getImpl().getGpuBuffer();
-          if (!bufferBuffer) {
-            console.log("missing!!!", "byteArray.getImpl().getGpuBuffer();");
-            continue;
-          }
-          resource = { buffer: bufferBuffer };
-        } else if (byteArray instanceof BopTexture) {
-          const bufferBuffer = byteArray.getTextureView();
-          if (!bufferBuffer) {
-            console.log("missing!!!", "byteArray.getImpl().getGpuTexture();");
-            continue;
-          }
-          resource = bufferBuffer;
-        } else {
-          if (!byteArray) {
-            continue;
-          }
-          // TODO: Pool allocate TMP buffer.
-          const bufferBuffer = device.createBuffer({
-            size: byteArray.byteLength,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
-          });
-          device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
-          // console.log("EncoderDrawPrimitives", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
-          resource = { buffer: bufferBuffer };
-        }
-
-        const bindGroupEntry: GPUBindGroupEntry = {
-          binding: index,
-          resource: resource
-        };
-        bindGroupEntries.push(bindGroupEntry);
-      }
-      return bindGroupEntries;
-    };
     const vertexBindGroup = device.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
-      entries: marshalBindGroupEntries(proxyEncoder.vertexBytes),
+      entries: EncoderMarshalBindGroupEntries(device, proxyEncoder.vertexBytes),
     });
     const fragmentBindGroup = device.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(1),
-      entries: marshalBindGroupEntries(proxyEncoder.fragmentBytes),
+      entries: EncoderMarshalBindGroupEntries(device, proxyEncoder.fragmentBytes),
     });
     encoder.setBindGroup(0, vertexBindGroup);
     encoder.setBindGroup(1, fragmentBindGroup);
@@ -1372,60 +1380,20 @@ function EncoderSetComputeBuffer(encoder: MTLComputeCommandEncoder, buffer: BopA
   buffer.getImpl().ensureGpuBuffer();
   encoder.setBytes(buffer, index);
 }
-function EncoderSetComputeTexture(encoder: MTLComputeCommandEncoder, texture: BopTexture, index: number) {
+function EncoderSetComputeTexture(encoder: MTLComputeCommandEncoder, texture: BopTexture, sampler: BopTextureSampler, index: number) {
   // console.log('EncoderSetComputeBuffer', encoder, buffer, offset, index);
   texture.ensureGpuBuffer();
-  encoder.setBytes(texture, index);
+  sampler.ensureGpu();
+  encoder.setBytes(new BopTextureEntry(texture, sampler), index);
 }
 function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: number) {
   // console.log('EncoderDispatchWorkgroups', encoder, count);
   const proxyEncoder = encoder;
   encoder.queueTask(async (encoder, commandEncoder, device, renderPipeline) => {
     const internals = SharedMTLInternals();
-    const marshalBindGroupEntries = (buffers: Array<ArrayBuffer|BopArray<unknown>|BopTexture|undefined>) => {
-      const bindGroupEntries: GPUBindGroupEntry[] = [];
-      for (let index = 0; index < buffers.length; ++index) {
-        const byteArray = buffers[index];
-        let resource: GPUBindingResource|undefined;
-        if (byteArray instanceof BopArray) {
-          const bufferBuffer = byteArray.getImpl().getGpuBuffer();
-          if (!bufferBuffer) {
-            console.log("missing!!!", "byteArray.getImpl().getGpuBuffer();");
-            continue;
-          }
-          resource = { buffer: bufferBuffer };
-        } else if (byteArray instanceof BopTexture) {
-          const bufferBuffer = byteArray.getTextureView();
-          if (!bufferBuffer) {
-            console.log("missing!!!", "byteArray.getImpl().getGpuTexture();");
-            continue;
-          }
-          resource = bufferBuffer;
-        } else {
-          if (!byteArray) {
-            continue;
-          }
-          // TODO: Pool allocate TMP buffer.
-          const bufferBuffer = device.createBuffer({
-            size: byteArray.byteLength,
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
-          });
-          device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
-          // console.log("EncoderDispatchWorkgroups", "device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);");
-          resource = { buffer: bufferBuffer };
-        }
-
-        const bindGroupEntry: GPUBindGroupEntry = {
-          binding: index,
-          resource: resource,
-        };
-        bindGroupEntries.push(bindGroupEntry);
-      }
-      return bindGroupEntries;
-    };
     const dataBindGroup = device.createBindGroup({
       layout: renderPipeline.getBindGroupLayout(0),
-      entries: marshalBindGroupEntries(proxyEncoder.dataBytes),
+      entries: EncoderMarshalBindGroupEntries(device, proxyEncoder.dataBytes),
     });
     encoder.setBindGroup(0, dataBindGroup);
     encoder.setBindGroup(1, device.createBindGroup({ layout: renderPipeline.getBindGroupLayout(1), entries: [] }));
@@ -1434,6 +1402,61 @@ function EncoderDispatchWorkgroups(encoder: MTLComputeCommandEncoder, count: num
   });
 }
 
+function EncoderMarshalBindGroupEntries(device: GPUDevice, buffers: Array<ArrayBuffer|BopArray<unknown>|BopTextureEntry|undefined>) {
+  const bindGroupEntries: GPUBindGroupEntry[] = [];
+  let nextBindingIndex = 0;
+  for (let index = 0; index < buffers.length; ++index) {
+    const byteArray = buffers[index];
+    let resource: GPUBindingResource|undefined;
+    let auxResource: GPUBindingResource|undefined;
+    if (byteArray instanceof BopArray) {
+      const bufferBuffer = byteArray.getImpl().getGpuBuffer();
+      if (!bufferBuffer) {
+        console.log("missing!!!", "byteArray.getImpl().getGpuBuffer();");
+        continue;
+      }
+      resource = { buffer: bufferBuffer };
+    } else if (byteArray instanceof BopTextureEntry) {
+      const bufferBuffer = byteArray.texture.getTextureView();
+      const sampler = byteArray.sampler.getSampler();
+      if (!bufferBuffer) {
+        console.log("missing!!!", "byteArray.texture.getTextureView();");
+        continue;
+      }
+      if (!sampler) {
+        console.log("missing!!!", "byteArray.sampler.getSampler();");
+        continue;
+      }
+      resource = bufferBuffer;
+      auxResource = sampler;
+    } else {
+      if (!byteArray) {
+        continue;
+      }
+      // TODO: Pool allocate TMP buffer.
+      const bufferBuffer = device.createBuffer({
+        size: byteArray.byteLength,
+        usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.UNIFORM
+      });
+      device.queue.writeBuffer(bufferBuffer, 0, byteArray, 0, byteArray.byteLength);
+      resource = { buffer: bufferBuffer };
+    }
+
+    const bindGroupEntry: GPUBindGroupEntry = {
+      binding: nextBindingIndex++,
+      resource: resource
+    };
+    bindGroupEntries.push(bindGroupEntry);
+    if (auxResource) {
+      const auxBindGroupEntry: GPUBindGroupEntry = {
+        binding: nextBindingIndex++,
+        resource: auxResource
+      };
+      bindGroupEntries.push(auxBindGroupEntry);
+    }
+  }
+  return bindGroupEntries;
+}
 
 
 function EncoderEndEncoding(encoder: MTLRenderCommandEncoder|MTLComputeCommandEncoder) {

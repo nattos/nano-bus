@@ -31,6 +31,7 @@ const WEBGPU_GPU_RENAMES: Record<string, string> = {
   'BopLib::float3': 'vec3f',
   'BopLib::float4': 'vec4f',
   'BopLib::Texture': 'texture_2d<f32>',
+  'BopLib::TextureSampler': 'sampler',
   'Array': 'array',
   'BopLib::Array': 'array',
 };

@@ -335,6 +335,10 @@ function bopRenderElementsCall(
               assign.ref.writePropertyAccess(renderPassDescriptorInstanceVar.identifierToken).source.writeVariableReference(instanceVarsIdentifier);
               assign.value.writeVariableReference(renderPassDescriptorVar);
             }
+
+            for (const binding of vertexKernel.bindings.bindings.concat(fragmentKernel.bindings.bindings)) {
+              binding.writeIntoInitFunc?.(blockWriter);
+            }
           }
 
 
@@ -434,6 +438,13 @@ function bopRenderElementsCall(
                   call.addArg().writeVariableReference(encoderVar);
                   call.addArg().writeVariableReference(arrayVar);
                   call.addArg().writeLiteralInt(0);
+                  call.addArg().writeLiteralInt(binding.location);
+                } else if (binding.type === 'texture') {
+                  const { textureVar, samplerVar } = binding.marshal(dataVar, blockWriter);
+                  const call = blockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(writer.makeInternalToken(`EncoderSet${stage}Texture`));
+                  call.addArg().writeVariableReference(encoderVar);
+                  call.addArg().writeVariableReference(textureVar);
+                  call.addArg().writeVariableReference(samplerVar);
                   call.addArg().writeLiteralInt(binding.location);
                 }
               }

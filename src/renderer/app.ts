@@ -238,7 +238,7 @@ interface TriangleVertex {
 }
 
 @vertexShader
-function vertexShader(position: TriangleVertex, threadId: int, options: { placeholder: float }): TriangleVertex {
+function vertexShader(position: TriangleVertex, threadId: int, options: { placeholder: float, inTex: Texture }): TriangleVertex {
   return position;
 }
 @fragmentShader
@@ -256,6 +256,8 @@ function fragmentShader(position: TriangleVertex, options: { alpha: float, beta:
 }
 
 function test() {
+  const tex = Texture.persistent(128, 128);
+
   // const v: TriangleVertex = { position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) };
   // v.position = new float4(1, 2, 3, 4);
   // v.position.x += 1;
@@ -268,7 +270,7 @@ function test() {
 
   Gpu.renderElements
       (positions.length, vertexShader, fragmentShader)
-      (positions, { placeholder: 0.2 })
+      (positions, { placeholder: 0.2, inTex: tex })
       ({ alpha: 0.9, beta: 1.8, other: { theta: 2.0 }, color: new float4(0.1, 0.2, 0.3, 0.0), someBuf: positions });
 }
 `;

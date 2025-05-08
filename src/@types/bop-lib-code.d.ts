@@ -239,6 +239,10 @@ interface TextureConstructor {
 }
 declare var Texture: TextureConstructor;
 
+interface TextureSampler {}
+interface TextureSamplerConstructor {}
+declare var TextureSampler: TextureSamplerConstructor;
+
 
 interface CoordMode { coordMode: 0|1; }
 interface NormalizedCoordMode extends CoordMode { coordMode: 0; }

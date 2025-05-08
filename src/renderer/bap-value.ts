@@ -143,6 +143,7 @@ export interface BapTypeSpec {
   };
   marshal?: {
     ensureMarshalable(fromVisitor: BapVisitor): void;
+    blittable?: boolean;
   }
 }
 

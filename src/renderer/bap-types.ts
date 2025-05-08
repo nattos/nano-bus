@@ -79,6 +79,7 @@ export class BapTypes extends BapRootContextMixin {
 
         Array: resolveBasicType('Array'),
         Texture: resolveBasicType('Texture'),
+        TextureSampler: resolveBasicType('TextureSampler'),
         MTLDevice: resolveInternalType('MTLDevice'),
         MTLFunction: resolveInternalType('MTLFunction'),
         MTLRenderPipelineDescriptor: resolveInternalType('MTLRenderPipelineDescriptor'),
@@ -332,10 +333,10 @@ export class BapTypes extends BapRootContextMixin {
           }
         }
         const structWriterOuter = context.globalWriter.global.writeStruct(identifier.identifierToken);
-        // structWriterOuter.touchedByProxy = {
-        //   get touchedByCpu() { return true; },
-        //   get touchedByGpu() { return false; },
-        // };
+        structWriterOuter.touchedByProxy = {
+          get touchedByCpu() { return true; },
+          get touchedByGpu() { return newType.marshal?.blittable ?? true; },
+        };
         const structWriter = structWriterOuter.body;
 
         for (const [identifier, property] of fieldIdentifierMap) {

@@ -12,7 +12,7 @@ export interface GpuBindings {
 }
 
 /** Data that translates to shader uniforms. */
-export type GpuBinding = GpuFixedBinding | GpuArrayBinding;
+export type GpuBinding = GpuFixedBinding | GpuArrayBinding | GpuTextureBinding;
 
 /** Several fields combined into a single blittable struct. */
 export interface GpuFixedBinding extends GpuBindingBase {
@@ -21,6 +21,7 @@ export interface GpuFixedBinding extends GpuBindingBase {
   marshalStructCodeTypeSpec: CodeTypeSpec;
   marshal(dataVar: CodeVariable, bufferVars: BufferFiller, body: CodeStatementWriter): void;
   copyIntoUserVar(userVar: CodeVariable, body: CodeStatementWriter, dataVarGetter: (expr: CodeExpressionWriter) => void): void;
+  unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void;
 }
 /** A buffer that must be bound as its own uniform. */
 export interface GpuArrayBinding extends GpuBindingBase {
@@ -28,9 +29,16 @@ export interface GpuArrayBinding extends GpuBindingBase {
   userType: BapTypeSpec;
   marshalArrayCodeTypeSpec: CodeTypeSpec;
   marshal(dataVar: CodeVariable, body: CodeStatementWriter): { arrayVar: CodeVariable; };
+  unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void;
+}
+/** A texture uniform along with a sampler. */
+export interface GpuTextureBinding extends GpuBindingBase {
+  type: 'texture';
+  marshal(dataVar: CodeVariable, body: CodeStatementWriter): { textureVar: CodeVariable; samplerVar: CodeVariable; };
+  unmarshal(textureDataVar: CodeVariable, samplerDataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void;
 }
 export interface GpuBindingBase {
   nameHint: string;
   location: number;
-  unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void;
+  writeIntoInitFunc?(body: CodeStatementWriter): void;
 }
