@@ -51,7 +51,8 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
             const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function } });
             for (let i = 0; i < parameterEntries.length; ++i) {
               const parameterSignature = parameterEntries[i];
-              const argValue = args.at(i) ?? { type: 'error' };
+              let argValue = args.at(i) ?? { type: 'error' };
+              argValue = this.coerce(context, argValue, parameterSignature.type);
               // TODO: Sometimes pass copy!!!
               childContext.scope.declare(parameterSignature.identifier, argValue);
             }

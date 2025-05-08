@@ -58,4 +58,8 @@ fn BopLib_exportDebugOut(lineNumber: i32, length: i32, v0: f32, v1: f32, v2: f32
   BopLib_DebugOuts_ValuesArray[lineNumber - BopLib_DebugOuts_Metadata.viewportStartLine] = BopLib_DebugOuts_Entry(length, values);
 }
 
+fn BopLib_readDebugIn(entryIndex: i32) -> f32 {
+  return BopLib_DebugIns_ValuesArray[entryIndex];
+}
+
 `;

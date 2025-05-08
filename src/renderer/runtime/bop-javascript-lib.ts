@@ -106,6 +106,23 @@ class BopLibDebugOuts {
   }
 }
 
+class BopLibDebugIns {
+  readonly debugIns: number[] = [];
+
+  read(entryIndex: number): number {
+    return this.debugIns.at(entryIndex) ?? 0.0;
+  }
+  merge(ins: BopLibDebugInEntry[]) {
+    this.debugIns.splice(0);
+    this.debugIns.push(...ins.map(e => e.defaultValue));
+  }
+}
+
+export interface BopLibDebugInEntry {
+  readonly lineNumber: number;
+  readonly defaultValue: number;
+}
+
 const BopLib = {
   int: {
     cast(x: number): number {
@@ -133,9 +150,13 @@ const BopLib = {
   },
 
   debugOuts: new BopLibDebugOuts(),
+  debugIns: new BopLibDebugIns(),
 
   exportDebugOut(lineNumber: number, length: number, v0: number, v1: number, v2: number, v3: number) {
     this.debugOuts.write(lineNumber, length, v0, v1, v2, v3);
+  },
+  readDebugIn(entryIndex: number): number {
+    return this.debugIns.read(entryIndex);
   },
 
   continueFlag: undefined as (utils.Resolvable<unknown>|undefined),
@@ -303,7 +324,7 @@ class BopArrayImpl<T> {
       // console.log("device.createBuffer");
       this.gpuBuffer?.destroy();
       this.gpuBuffer = device.createBuffer({
-        size: byteLength,
+        size: Math.max(64, byteLength),
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC | GPUBufferUsage.UNIFORM
       });
       gpuDirty = true;
@@ -333,7 +354,7 @@ class BopArrayImpl<T> {
     if (this.gpuVertexBuffer === undefined || this.gpuVertexBuffer.size < byteLength) {
       this.gpuVertexBuffer?.destroy();
       this.gpuVertexBuffer = device.createBuffer({
-        size: byteLength,
+        size: Math.max(64, byteLength),
         usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
       });
       gpuDirty = true;
@@ -531,6 +552,7 @@ export class MTLInternals {
   private debugInOuts?: {
     prepare(): void;
     readback(): Promise<void>;
+    uploadIns(values: number[]): void;
     createDebugInOutsBindGroup(layout: GPUBindGroupLayout): GPUBindGroup;
   };
 
@@ -602,7 +624,7 @@ export class MTLInternals {
         console.error('WebGPU initialization failed.');
       }
       if (device) {
-        const insValuesProxy = new BopArray(BopFloat4, 100);
+        const insValuesProxy = new BopArray(BopLib.float, 0);
 
         const outsMetadataByteLength = 2 * 4;
         const outsMetadataCpuBuffer = new ArrayBuffer(outsMetadataByteLength);
@@ -739,6 +761,12 @@ export class MTLInternals {
               readbackQueued = true;
             }
           },
+          uploadIns: (values: number[]) => {
+            const valueArray = insValuesProxy.getImpl();
+            for (let i = 0; i < values.length; ++i) {
+              valueArray.set(i, values[i]);
+            }
+          },
           createDebugInOutsBindGroup(layout) {
             const insValuesGpuBuffer = insValuesProxy.getImpl().getGpuBuffer();
             return createDebugInOutsBindGroup(insValuesGpuBuffer!, layout);
@@ -778,6 +806,16 @@ export class MTLInternals {
 
   loadShaderCode(code: string) {
     this.shaderCodeProvider.resolve(code);
+  }
+  loadDebugIns(cpuDebugIns: BopLibDebugInEntry[], gpuDebugIns: BopLibDebugInEntry[]) {
+    console.log(cpuDebugIns, gpuDebugIns);
+    console.log('Loading CPU debug ins', cpuDebugIns);
+    BopLib.debugIns.merge(cpuDebugIns);
+
+    this.globalEncoderQueue.push(async () => {
+      console.log('Loading GPU debug ins', gpuDebugIns);
+      SharedMTLInternals().debugInOuts?.uploadIns(gpuDebugIns.map(e => e.defaultValue));
+    });
   }
   setTargetCanvasContext(context: GPUCanvasContext) {
     this.targetCanvasContextProvider.resolve(context);

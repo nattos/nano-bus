@@ -7,6 +7,7 @@ import { BapIdentifierPrefix } from './bap-constants';
 import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapTypes } from './bap-types';
 import { BapRootContextMixin } from './bap-root-context-mixin';
+import { BapDebugInOuts } from './bap-debug-ins-outs';
 
 type AnyPossibleNode<TType extends ts.SyntaxKind> = ts.Node&{ readonly kind: TType };
 export type BapVisitorImpl<TNode> = BapVisitor&{ impl(node: TNode|Node): BapSubtreeGenerator|undefined; };
@@ -17,6 +18,7 @@ export interface BapVisitorRootContext {
   readonly sourceRoot: ts.SourceFile;
   readonly tc: ts.TypeChecker;
   readonly types: BapTypes;
+  readonly debugInOuts: BapDebugInOuts;
   readonly globals: {
     prepareFuncs: CodeVariable[];
   };
@@ -103,6 +105,43 @@ export class BapVisitor extends BapRootContextMixin {
       }
     }
     return child;
+  }
+
+  protected coerce(context: BapGenerateContext, value: BapSubtreeValue, toType: ts.Type|BapTypeSpec): BapSubtreeValue;
+  protected coerce(context: BapGenerateContext, value: BapSubtreeValue|undefined, toType: ts.Type|BapTypeSpec): BapSubtreeValue|undefined;
+  protected coerce(context: BapGenerateContext, value: BapSubtreeValue|undefined, toType: ts.Type|BapTypeSpec): BapSubtreeValue|undefined {
+    return BapVisitor.coerce(context, value, toType);
+  }
+  static coerce(context: BapGenerateContext, value: BapSubtreeValue|undefined, toType: ts.Type|BapTypeSpec): BapSubtreeValue|undefined {
+    if (!value) {
+      return;
+    }
+    const basics = context.scope.rootContext.types.basic(context);
+    let toTypeSpec: BapTypeSpec|undefined;
+    if ('flags' in toType) {
+      toTypeSpec = context.scope.rootContext.types.type(toType).generate(context);
+    } else {
+      toTypeSpec = toType;
+    }
+    if (value.typeSpec === toTypeSpec) {
+      return value;
+    }
+    if (value.typeSpec === basics.int && toTypeSpec === basics.float) {
+      return {
+        type: 'cached',
+        typeSpec: toTypeSpec,
+        writeIntoExpression: (prepare) => {
+          const coerceVar = prepare.scope.allocateVariableIdentifier(toTypeSpec.codeTypeSpec, BapIdentifierPrefix.Local, 'coerce');
+          const coerceInit = prepare.writeVariableDeclaration(coerceVar);
+          const valueWriter = value.writeIntoExpression?.(prepare);
+          return (expr) => {
+            valueWriter?.(coerceInit.initializer.writeExpression().writeCast(toTypeSpec.codeTypeSpec).source);
+            expr.writeVariableReference(coerceVar);
+          };
+        },
+      };
+    }
+    return value;
   }
 
   public static mapNodeType<

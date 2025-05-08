@@ -6,6 +6,7 @@ import { BapTypes } from "./bap-types";
 import { BapIdentifierPrefix } from "./bap-constants";
 import { evalJavascriptInContext, PushInternalContinueFlag, SharedMTLInternals } from './runtime/bop-javascript-lib';
 import { writeSourceNodeCode } from './bap-processor';
+import { BapDebugInOuts } from './bap-debug-ins-outs';
 
 export interface CompiledDebugIn {
   lineNumber: number;
@@ -44,7 +45,10 @@ export async function compile(code: string): Promise<CompileResult> {
   const program = ts.createProgram(['test.ts'], {}, compilerHost);
   const root = program.getSourceFile('test.ts')!;
 
-  const { cpuPrepareCode, cpuRunFrameCode, gpuCode } = translateProgram({ program, sourceRoot: root });
+  const {
+    cpuPrepareCode, cpuRunFrameCode, gpuCode,
+    cpuDebugIns, gpuDebugIns,
+  } = translateProgram({ program, sourceRoot: root });
 
   let prepared = false;
   const frameRunner: FrameRunner = {
@@ -52,6 +56,7 @@ export async function compile(code: string): Promise<CompileResult> {
       if (!prepared) {
         prepared = true;
         SharedMTLInternals().loadShaderCode(gpuCode);
+        SharedMTLInternals().loadDebugIns(cpuDebugIns, gpuDebugIns);
         const continueFlag = new utils.Resolvable<unknown>();
         PushInternalContinueFlag(continueFlag);
         evalJavascriptInContext(cpuPrepareCode);
@@ -101,6 +106,7 @@ function translateProgram(init: {
     sourceRoot: init.sourceRoot,
     tc: tc,
     get types() { return types; },
+    debugInOuts: new BapDebugInOuts(),
     globals: {
       prepareFuncs: prepareFuncs,
     },
@@ -145,7 +151,7 @@ const instanceVars = {};
   continueFlag?.resolve(undefined);
 })();
 `;
-  return { cpuPrepareCode, cpuRunFrameCode, gpuCode };
+  return { cpuPrepareCode, cpuRunFrameCode, gpuCode, cpuDebugIns: rootContext.debugInOuts.cpuIns, gpuDebugIns: rootContext.debugInOuts.gpuIns };
 }
 
 

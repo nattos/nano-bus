@@ -6,7 +6,7 @@ import { CodeNamedToken, CodePrimitiveType, CodeScope, CodeScopeType, CodeTypeSp
 import { BapIdentifierPrefix } from './bap-constants';
 import { BapConstructorSymbol, BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapRootContextMixin } from './bap-root-context-mixin';
-import { BapVisitorRootContext } from './bap-visitor';
+import { BapVisitor, BapVisitorRootContext } from './bap-visitor';
 
 export type ResolvedType = { name?: string, type?: BapTypeSpec, typeArgs: ResolvedType[] };
 
@@ -587,39 +587,58 @@ export class BapLibLoader extends BapRootContextMixin {
             isField: false,
             token: funcIdentifier.identifierToken,
             genType: { generate: (context: BapGenerateContext) => { return this.types.primitiveTypeSpec(CodePrimitiveType.Function); }, debug: { debugName: funcIdentifier.identifierToken.nameHint } },
-            gen: (bindScope) => ({
-              generateRead: (prepare) => {
-                const funcLiteral: BapFunctionLiteral = {
-                  type: 'function',
-                  typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
-                  resolve: (args: BapSubtreeValue[], typeArgs: BapTypeSpec[]) => {
-                    return {
-                      type: 'literal',
-                      typeSpec: returnType,
-                      writeIntoExpression: (prepare) => {
-                        const argWriters = args.map(v => v.writeIntoExpression?.(prepare));
-                        return (expr) => {
-                          const funcCallExpr = expr.writeStaticFunctionCall(funcIdentifier.identifierToken);
-                          funcCallExpr.externCallSemantics = true;
-                          if (!isStaticLike) {
-                            for (const typeArgSpec of typeArgCodeSpecs) {
-                              funcCallExpr.addTemplateArg(typeArgSpec);
-                            }
-                          }
-                          for (const typeArgSpec of typeArgs) {
-                            funcCallExpr.addTemplateArg(typeArgSpec.codeTypeSpec);
-                          }
-                          for (const writer of argWriters) {
-                            writer?.(funcCallExpr.addArg());
-                          }
+            gen: (bindScope) => {
+              return {
+                generateRead: (prepare) => {
+                  const funcLiteral: BapFunctionLiteral = {
+                    type: 'function',
+                    typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
+                    resolve: (args: BapSubtreeValue[], typeArgs: BapTypeSpec[]) => {
+                      function toResolvedType(type: BapTypeSpec): ResolvedType {
+                        return {
+                          type: type,
+                          typeArgs: [],
                         };
-                      },
-                    };
-                  },
-                };
-                return funcLiteral;
-              },
-            }),
+                      }
+                      const paramTypes = method.parameters.map(p => {
+                        const paramType: BapTypeSpec = this.resolveMethodParamType(
+                          context,
+                          p.type,
+                          typeArgSpecs.map(toResolvedType),
+                          typeArgs.map(toResolvedType),
+                        ) ?? this.types.errorType;
+                        return paramType;
+                      });
+                      // console.log(shortName, funcName, `paramTypes`, paramTypes);
+
+                      return {
+                        type: 'literal',
+                        typeSpec: returnType,
+                        writeIntoExpression: (prepare) => {
+                          const argWriters = utils.zip(args, paramTypes).map(([v, t]) => BapVisitor.coerce(context, v, t)?.writeIntoExpression?.(prepare));
+                          return (expr) => {
+                            const funcCallExpr = expr.writeStaticFunctionCall(funcIdentifier.identifierToken);
+                            funcCallExpr.externCallSemantics = true;
+                            if (!isStaticLike) {
+                              for (const typeArgSpec of typeArgCodeSpecs) {
+                                funcCallExpr.addTemplateArg(typeArgSpec);
+                              }
+                            }
+                            for (const typeArgSpec of typeArgs) {
+                              funcCallExpr.addTemplateArg(typeArgSpec.codeTypeSpec);
+                            }
+                            for (const writer of argWriters) {
+                              writer?.(funcCallExpr.addArg());
+                            }
+                          };
+                        },
+                      };
+                    },
+                  };
+                  return funcLiteral;
+                },
+              }
+            }
           });
       } else {
         const funcName = method.name;
@@ -648,19 +667,28 @@ export class BapLibLoader extends BapRootContextMixin {
                   typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
                   resolve: (args: BapSubtreeValue[], methodTypeArgs: BapTypeSpec[]) => {
                     const thisValue = bindScope.resolve(BapThisSymbol);
+                    const paramTypes = method.parameters.map(p => {
+                      const paramType: BapTypeSpec = this.resolveMethodParamType(
+                        context,
+                        p.type,
+                        typeArgSpecs.map(toResolvedType),
+                        methodTypeArgs.map(toResolvedType),
+                      ) ?? this.types.errorType;
+                      return paramType;
+                    });
                     const returnType: BapTypeSpec = this.resolveMethodParamType(
                       context,
                       method.returnType,
                       typeArgSpecs.map(toResolvedType),
                       methodTypeArgs.map(toResolvedType),
                     ) ?? this.types.errorType;
-                    console.log(`returnType`, returnType);
+                    // console.log(shortName, funcName, `paramTypes`, paramTypes, `returnType`, returnType);
                     return {
                       type: 'literal',
                       typeSpec: returnType,
                       writeIntoExpression: (prepare) => {
                         const thisWriter = thisValue?.writeIntoExpression?.(prepare);
-                        const argWriters = args.map(v => v.writeIntoExpression?.(prepare));
+                        const argWriters = utils.zip(args, paramTypes).map(([v, t]) => BapVisitor.coerce(context, v, t)?.writeIntoExpression?.(prepare));
                         return (expr) => {
                           const funcCallExpr = expr.writeStaticFunctionCall(funcIdentifier.identifierToken);
                           funcCallExpr.externCallSemantics = true;
