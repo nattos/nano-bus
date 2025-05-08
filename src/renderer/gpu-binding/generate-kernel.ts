@@ -1,7 +1,7 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
 import { CodeAttributeDecl, CodeAttributeKey, CodeNamedToken, CodeScopeType, CodeTypeSpec, CodeVariable } from "../code-writer/code-writer";
-import { BapControlFlowScopeType, BapPrototypeScope, BapReturnValueSymbol } from '../bap-scope';
+import { BapControlFlowScopeType, BapGpuKernelScope, BapPrototypeScope, BapReturnValueSymbol } from '../bap-scope';
 import { BapSubtreeGenerator, BapGenerateContext, BapTypeSpec } from '../bap-value';
 import { BapVariableDeclarationVisitor } from '../baps/variable-declaration';
 import { BapIdentifierPrefix } from '../bap-constants';
@@ -58,6 +58,10 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     if (!isGpuBoundFunc) {
       return;
     }
+    const gpuKernelScope: BapGpuKernelScope =
+        isGpuComputeFunc ? BapGpuKernelScope.Compute :
+        isGpuVertexFunc ? BapGpuKernelScope.Vertex :
+        BapGpuKernelScope.Fragment;
 
     const kernelIdentifier = context.globalWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, functionName);
     const kernelFunc = context.globalWriter.global.writeFunction(kernelIdentifier);
@@ -76,7 +80,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     const prepare = kernelFunc.body;
 
     const childCodeScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Function);
-    const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function } });
+    const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function }, gpu: { kernel: gpuKernelScope } });
 
 
     let userReturnType = this.types.type(returnType).generate(context);

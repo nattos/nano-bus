@@ -1,10 +1,10 @@
-import { BapPrototypeScope, BapPrototypeMember } from '../bap-scope';
+import { BapPrototypeScope, BapPrototypeMember, BapGpuKernelScope } from '../bap-scope';
 import { resolveBapFields } from '../bap-utils';
-import { BapGenerateContext, BapTypeSpec, BapFields, BapSubtreeGenerator } from '../bap-value';
+import { BapGenerateContext, BapTypeSpec, BapFields, BapSubtreeGenerator, BapSubtreeValue } from '../bap-value';
 import { BapVisitor } from '../bap-visitor';
 import { BapPropertyAccessExpressionVisitor } from '../baps/property-access-expression';
 import { BapIdentifierPrefix } from '../bap-constants';
-import { CodeAttributeKey, CodeVariable, CodeScopeType, CodeTypeSpec, CodeStatementWriter, CodeExpressionWriter } from '../code-writer/code-writer';
+import { CodeAttributeKey, CodeVariable, CodeScopeType, CodeTypeSpec, CodeStatementWriter, CodeExpressionWriter, CodePrimitiveType, CodeBinaryOperator } from '../code-writer/code-writer';
 import { BufferFiller } from './buffer-filler';
 import { GpuBindings, GpuFixedBinding, GpuBinding } from './gpu-bindings';
 import { BapAssignmentExpressionVisitor } from '../baps/assignment-expression';
@@ -44,17 +44,19 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     identifier: string;
     bopType: BapTypeSpec;
   }
+  type HasMarshalStructFieldsEntry<T extends { marshalStructFields: { [k: string]: CodeVariable} }> = {
+    entry: T;
+    field: keyof T['marshalStructFields'];
+  };
   interface CopyField {
-    // type: 'int'|'float';
+    type: 'field';
     copyAsType: BapTypeSpec;
     path: PathPart[];
     marshalStructField?: CodeVariable;
-    forBindArray?: {
-      entry: BindArray;
-      field: keyof BindArray['marshalStructFields'];
-    };
+    forBindArray?: HasMarshalStructFieldsEntry<BindArray>|HasMarshalStructFieldsEntry<BindTexture>;
   }
   interface BindArray {
+    type: 'array';
     elementBinding: GpuFixedBinding;
     userType: BapTypeSpec;
     path: PathPart[];
@@ -63,7 +65,11 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
     };
   }
   interface BindTexture {
+    type: 'texture';
     path: PathPart[];
+    marshalStructFields: {
+      size?: CodeVariable;
+    };
   }
 
   const collectedCopyFields: Array<CopyField> = [];
@@ -77,14 +83,26 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
       const fieldSubpath = subpath.concat({ identifier: fieldIdentifier, bopType: field.type });
       if (basics.copyMarshallableSet.has(field.type)) {
         collectedCopyFields.push({
+          type: 'field',
           path: fieldSubpath,
           copyAsType: field.type,
         });
       } else if (field.type === basics.Texture) {
-        const bindArray: BindTexture = {
+        const bindTexture: BindTexture = {
+          type: 'texture',
           path: fieldSubpath,
+          marshalStructFields: {},
         };
-        collectedTextures.push(bindArray);
+        collectedTextures.push(bindTexture);
+        collectedCopyFields.push({
+          type: 'field',
+          path: fieldSubpath.concat({ identifier: 'size', bopType: basics.int2 }),
+          copyAsType: basics.int2,
+          forBindArray: {
+            entry: bindTexture,
+            field: 'size',
+          },
+        });
       } else if (field.type.prototypeScope.arrayOfType) {
         const arrayOfType = field.type.prototypeScope.arrayOfType;
         // console.log(arrayOfType);
@@ -96,6 +114,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
           continue;
         }
         const bindArray: BindArray = {
+          type: 'array',
           path: fieldSubpath,
           userType: arrayOfType,
           elementBinding: elementBinding,
@@ -103,6 +122,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
         };
         collectedArrays.push(bindArray);
         collectedCopyFields.push({
+          type: 'field',
           path: fieldSubpath.concat({ identifier: 'length', bopType: basics.int }),
           copyAsType: basics.int,
           forBindArray: {
@@ -204,7 +224,8 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
       field.marshalStructField = rawField;
 
       if (field.forBindArray) {
-        field.forBindArray.entry.marshalStructFields[field.forBindArray.field] = rawField;
+        const entry = field.forBindArray.entry;
+        (entry.marshalStructFields as any)[field.forBindArray.field] = rawField;
       }
       fieldIndex++;
     }
@@ -364,7 +385,6 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
               };
             },
             writeIndexAccessIntoExpression: (prepare, indexValue) => {
-              console.log(prepare, indexValue);
               const indexWriter = indexValue.writeIntoExpression?.(prepare);
 
               const dataVarGetter = (expr: CodeExpressionWriter) => {
@@ -482,28 +502,77 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
           }),
         });
 
-        // const lengthVar = binding.marshalStructFields.length;
-        // if (lengthVar && fixedDataVar) {
-        //   const thisFixedDataVar = fixedDataVar;
-        //   prototypeScope.declare('length', {
-        //     gen: (bindScope) => {
-        //       return ({
-        //         generateRead: () => ({
-        //           type: 'eval',
-        //           typeSpec: basics.int,
-        //           writeIntoExpression: (prepare) => {
-        //             return (expr) => {
-        //               expr.writePropertyAccess(lengthVar.identifierToken).source.writeVariableReference(thisFixedDataVar);
-        //             };
-        //           },
-        //         })
-        //       });
-        //     },
-        //     genType: { generate: () => basics.int },
-        //     token: context.globalWriter.errorToken,
-        //     isField: true,
-        //   });
-        // }
+        const sizeVar = binding.marshalStructFields.size;
+        if (sizeVar && fixedDataVar) {
+          const thisSizeVar = sizeVar;
+          const thisFixedDataVar = fixedDataVar;
+
+          prototypeScope.declare('size', {
+            gen: (bindScope) => {
+              return ({
+                generateRead: () => ({
+                  type: 'eval',
+                  typeSpec: basics.int2,
+                  writeIntoExpression: (prepare) => {
+                    return (expr) => {
+                      expr.writePropertyAccess(thisSizeVar.identifierToken).source.writeVariableReference(thisFixedDataVar);
+                    };
+                  },
+                })
+              });
+            },
+            genType: { generate: () => basics.int2 },
+            token: context.globalWriter.errorToken,
+            isField: true,
+          });
+
+          prototypeScope.declare('sample', {
+            gen: (bindScope) => {
+              return ({
+                generateRead: (context) => ({
+                  type: 'function',
+                  typeSpec: self.types.primitiveTypeSpec(CodePrimitiveType.Function),
+                  resolve: (args: Array<BapSubtreeValue|undefined>, typeArgs: BapTypeSpec[]): BapSubtreeValue => {
+                    const inKernel = context.scope.resolvedGpu?.kernel;
+                    const uvValue = args.at(0);
+                    return {
+                      type: 'eval',
+                      typeSpec: basics.float4,
+                      writeIntoExpression: (prepare) => {
+                        const uvWriter = uvValue?.writeIntoExpression?.(prepare);
+                        return (expr) => {
+                          if (inKernel !== BapGpuKernelScope.Fragment) {
+                            const sampleCall = expr.writeStaticFunctionCall(writer.makeInternalToken('textureLoad'));
+                            sampleCall.addArg().writeVariableReference(textureDataVar); // texture
+                            const coordArg = sampleCall.addArg(); // coords
+                            const coordCalc = coordArg
+                                .writeStaticFunctionCall(writer.makeInternalToken('vec2i')).addArg()
+                                .writeStaticFunctionCall(writer.makeInternalToken('round')).addArg()
+                                .writeBinaryOperation(CodeBinaryOperator.Divide);
+                            uvWriter?.(coordCalc.lhs);
+                            coordCalc.rhs
+                                .writeStaticFunctionCall(writer.makeInternalToken('vec2f')).addArg()
+                                .writePropertyAccess(thisSizeVar.identifierToken).source
+                                .writeVariableReference(thisFixedDataVar);
+                            sampleCall.addArg().writeLiteralInt(0); // level
+                          } else {
+                            const sampleCall = expr.writeStaticFunctionCall(writer.makeInternalToken('textureSample'));
+                            sampleCall.addArg().writeVariableReference(textureDataVar); // texture
+                            sampleCall.addArg().writeVariableReference(samplerDataVar); // sampler
+                            uvWriter?.(sampleCall.addArg()); // coords
+                          }
+                        };
+                      },
+                    };
+                  },
+                })
+              });
+            },
+            genType: { generate: () => basics.int },
+            token: context.globalWriter.errorToken,
+            isField: true,
+          });
+        }
       },
       writeIntoInitFunc: (body: CodeStatementWriter) => {
         const samplerAssign = body.writeAssignmentStatement();

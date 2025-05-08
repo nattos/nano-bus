@@ -21,10 +21,17 @@ export function bapIdentifierToNameHint(identifier: BapIdentifier): string {
   return 'var';
 }
 
+export enum BapGpuKernelScope {
+  Compute = 'compute',
+  Vertex = 'vertex',
+  Fragment = 'fragment',
+}
+
 export interface BapChildScopeOptions {
   cond?: BapSubtreeValue;
   controlFlowScope?: BapControlFlowScope;
   bindScope?: { thisValue?: BapSubtreeValue; };
+  gpu?: { kernel: BapGpuKernelScope };
 }
 
 export interface BapControlFlowScope {
@@ -105,6 +112,7 @@ export class BapScope {
     readonly cond?: BapSubtreeValue,
     readonly controlFlowScope?: BapControlFlowScope,
     readonly bindScope?: { thisValue?: BapSubtreeValue; },
+    readonly gpu?: BapChildScopeOptions['gpu'],
   ) {}
 
   declare(identifier: BapIdentifier, value: BapSubtreeValue) {
@@ -211,6 +219,16 @@ export class BapScope {
     return;
   }
 
+  get resolvedGpu(): BapChildScopeOptions['gpu']|undefined {
+    let scope: BapScope|undefined = this;
+    while (scope) {
+      if (scope.gpu) {
+        return scope.gpu;
+      }
+      scope = scope.parent;
+    }
+  }
+
   private markReferenced(instance: BapIdentifierInstance, refScopes: BapScope[]) {
     for (const refScope of refScopes) {
       refScope.referencedInChildren.add(instance);
@@ -239,6 +257,7 @@ export class BapScope {
       init?.cond,
       init?.controlFlowScope,
       init?.bindScope,
+      init?.gpu,
     );
     this.children.push(childScope);
     return childScope;

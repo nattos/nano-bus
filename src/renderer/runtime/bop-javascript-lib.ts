@@ -126,7 +126,10 @@ const BopLib = {
   Texture: {
     persistent(width: number, height: number, channels?: number) {
       return SharedMTLInternals().dequeuePersistentTexture(width, height, channels);
-    }
+    },
+    get_size(texture: BopTexture) {
+      return new BopFloat4(texture.width, texture.height);
+    },
   },
 
   debugOuts: new BopLibDebugOuts(),
@@ -498,6 +501,10 @@ export class BufferFiller {
   write_int(offset: number, value: int) {
     this.dataView.setInt32(this.writeOffset, value as unknown as number, true);
     this.writeOffset += 4;
+  }
+  write_int2(offset: number, value: int2) {
+    this.write_int(0, value.x);
+    this.write_int(0, value.y);
   }
   getBuffer() {
     return this.arrayBuffer;

@@ -239,6 +239,10 @@ interface TriangleVertex {
 
 @vertexShader
 function vertexShader(position: TriangleVertex, threadId: int, options: { placeholder: float, inTex: Texture }): TriangleVertex {
+  position.color = new float4(1, 1, 0, 1);
+  // position.color += new float4(-0.5, 0, 0, 0);
+  const texColor = options.inTex.sample(position.position.xy);
+  position.color += texColor;
   return position;
 }
 @fragmentShader

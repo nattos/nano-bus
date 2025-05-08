@@ -4,6 +4,8 @@ diagnostic(off, derivative_uniformity);
 `;
 export const WGSL_LIB_CODE = `
 
+fn BopLib_float2_constructor(x: f32, y: f32) -> vec2f { return vec2f(x, y); }
+
 fn BopLib_float4_constructor(x: f32, y: f32, z: f32, w: f32) -> vec4f { return vec4f(x, y, z, w); }
 fn BopLib_float4_constructor2(x: f32, y: f32, z: f32, w: f32) -> vec4f { return vec4f(x, y, z, w); }
 fn BopLib_float4_get_x(t: vec4f) -> f32 { return t.x; }
@@ -18,6 +20,7 @@ fn BopLib_float4_set_x_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.x
 fn BopLib_float4_set_y_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.y = v; }
 fn BopLib_float4_set_z_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.z = v; }
 fn BopLib_float4_set_w_storage(t: ptr<storage, vec4f, read_write>, v: f32) { t.w = v; }
+fn BopLib_float4_get_xy(t: vec4f) -> vec2f { return t.xy; }
 
 fn BopLib_float4_operatorAdd(lhs: vec4f, rhs: vec4f) -> vec4f { return vec4f(lhs.x + rhs.x, lhs.y + rhs.y, lhs.z + rhs.z, lhs.w + rhs.w); }
 fn BopLib_float4_operatorAdd1(lhs: f32, rhs: vec4f) -> vec4f { return vec4f(lhs + rhs.x, lhs + rhs.y, lhs + rhs.z, lhs + rhs.w); }

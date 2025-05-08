@@ -75,6 +75,7 @@ export class BapTypes extends BapRootContextMixin {
         float3: resolveBasicType('float3'),
         float4: resolveBasicType('float4'),
         int: resolveBasicType('int'),
+        int2: resolveBasicType('int2'),
         uint: resolveBasicType('uint'),
 
         Array: resolveBasicType('Array'),
