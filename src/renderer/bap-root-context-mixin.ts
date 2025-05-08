@@ -79,6 +79,9 @@ export class BapRootContextMixin {
     };
   }
 
+  protected getNodeLineNumber(node: ts.Node) {
+    return ts.getLineAndCharacterOfPosition(this.sourceRoot, node.getStart()).line;
+  }
 
   protected getSymbolType(s: ts.Symbol|undefined) {
     if (s?.valueDeclaration) {

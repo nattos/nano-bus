@@ -41,7 +41,7 @@ export class BapBinaryExpressionVisitor extends BapVisitor {
     const lhs = this.child(node.left);
     const rhs = this.child(node.right);
     if (assignOpType) {
-      return this.manualAssign({ lhs, rhs, opType: assignOpType });
+      return this.manualAssign({ lhs, rhs, opType: assignOpType, debugLoc: node });
     } else if (opType) {
       return this.manual({ lhs, rhs, opType });
     }
@@ -113,8 +113,13 @@ export class BapBinaryExpressionVisitor extends BapVisitor {
     };
   }
 
-  manualAssign({lhs, rhs, opType}: { lhs?: BapSubtreeGenerator, rhs?: BapSubtreeGenerator, opType: CodeBinaryOperator }): BapSubtreeGenerator|undefined {
+  manualAssign({lhs, rhs, opType, debugLoc}: {
+    lhs?: BapSubtreeGenerator;
+    rhs?: BapSubtreeGenerator;
+    opType: CodeBinaryOperator;
+    debugLoc?: ts.Node;
+  }): BapSubtreeGenerator|undefined {
     const valueGen = this.manual({lhs, rhs, opType});
-    return new BapAssignmentExpressionVisitor().manual({ refGen: lhs, valueGen });
+    return new BapAssignmentExpressionVisitor().manual({ refGen: lhs, valueGen, debugLoc });
   }
 }

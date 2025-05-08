@@ -1368,7 +1368,7 @@ function EncoderDrawPrimitives(encoder: MTLRenderCommandEncoder, type: MTLPrimit
     });
     encoder.setBindGroup(0, vertexBindGroup);
     encoder.setBindGroup(1, fragmentBindGroup);
-    // encoder.setBindGroup(2, internals.createDebugInOutsBindGroup(renderPipeline.getBindGroupLayout(2)));
+    encoder.setBindGroup(2, internals.createDebugInOutsBindGroup(renderPipeline.getBindGroupLayout(2)));
     encoder.draw(count);
   });
 }

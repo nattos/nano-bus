@@ -254,12 +254,15 @@ function fragmentShader(position: TriangleVertex, options: { alpha: float, beta:
   // const lenValue = options.someBuf.length;
   // color.x = gpuTest(options.alpha) / options.beta + options.other.theta;
   // color = color * 5.0 + (-color) * 4.0;
+  color.x = -0.5;
   color.x += bufValue;
   color = color + options.color;
   return color;
 }
 
 function test() {
+  let a = 0;
+  a;
   const tex = Texture.persistent(128, 128);
 
   // const v: TriangleVertex = { position: new float4(0.25, 0.25, 0, 1), color: new float4(0, 0, 0, 1) };

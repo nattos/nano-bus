@@ -1,8 +1,6 @@
 import * as utils from '../../utils';
 import ts from "typescript/lib/typescript";
-import { BapVisitor, BapVisitorRootContext } from "../bap-visitor";
-import { CodeBinaryOperator } from "../code-writer/code-writer";
-import { getNodeLabel } from "../ts-helpers";
+import { BapVisitor } from "../bap-visitor";
 import { BapSubtreeGenerator, BapGenerateContext } from '../bap-value';
 
 export class BapBlockVisitor extends BapVisitor {
@@ -15,7 +13,11 @@ export class BapBlockVisitor extends BapVisitor {
           type: 'statement',
           writeIntoExpression: (prepare) => {
             for (const stmtValue of stmtValues) {
-              stmtValue?.writeIntoExpression?.(prepare)?.(prepare.writeExpressionStatement().expr);
+              console.log(stmtValue);
+              const stmtWriter = stmtValue?.writeIntoExpression?.(prepare);
+              if (stmtWriter) {
+                stmtWriter(prepare.writeExpressionStatement().expr);
+              }
             }
             return undefined;
           },

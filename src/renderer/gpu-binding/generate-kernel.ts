@@ -77,7 +77,28 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       kernelFunc.addAttribute({ key: CodeAttributeKey.GpuFunctionFragment });
       kernelFunc.addReturnAttribute({ key: CodeAttributeKey.GpuBindLocation, intValue: 0 });
     }
+    const bindingLocation = isGpuVertexFunc ? CodeAttributeKey.GpuVertexBindingLocation : isGpuFragmentFunc ? CodeAttributeKey.GpuFragmentBindingLocation : CodeAttributeKey.GpuComputeBindingLocation;
     const prepare = kernelFunc.body;
+
+
+    {
+      const placeholderAssign = prepare.writeAssignmentStatement();
+      placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
+      placeholderAssign.value.writeVariableReferenceReference(context.globalWriter.makeInternalToken('BopLib_DebugIns_ValuesArray'));
+    }
+    if (gpuKernelScope !== BapGpuKernelScope.Vertex) {
+      {
+        const placeholderAssign = prepare.writeAssignmentStatement();
+        placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
+        placeholderAssign.value.writeVariableReferenceReference(context.globalWriter.makeInternalToken('BopLib_DebugOuts_Metadata'));
+      }
+      {
+        const placeholderAssign = prepare.writeAssignmentStatement();
+        placeholderAssign.ref.writeIdentifier(context.globalWriter.underscoreToken);
+        placeholderAssign.value.writeVariableReferenceReference(context.globalWriter.makeInternalToken('BopLib_DebugOuts_ValuesArray'));
+      }
+    }
+
 
     const childCodeScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Function);
     const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function }, gpu: { kernel: gpuKernelScope } });
@@ -140,7 +161,6 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     const vertexParamIndex = isGpuComputeFunc ? -1 : 0;
     const threadIdParamIndex = isGpuComputeFunc ? 0 : isGpuVertexFunc ? 1 : -1;
     const optionsParamIndex = isGpuComputeFunc ? 1 : isGpuVertexFunc ? 2 : 1;
-    const bindingLocation = isGpuVertexFunc ? CodeAttributeKey.GpuVertexBindingLocation : isGpuFragmentFunc ? CodeAttributeKey.GpuFragmentBindingLocation : CodeAttributeKey.GpuComputeBindingLocation;
 
     let paramIndex = 0;
     let optionsGpuBindings: GpuBindings|undefined;
@@ -272,8 +292,6 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       }
       paramIndex++;
     }
-
-
 
 
 

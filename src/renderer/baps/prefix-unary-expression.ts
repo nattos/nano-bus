@@ -63,6 +63,6 @@ export class BapPrefixUnaryExpressionVisitor extends BapVisitor {
   private asAssign(node: ts.PrefixUnaryExpression, opType: CodeBinaryOperator): BapSubtreeGenerator|undefined {
     const lhs = this.child(node.operand);
     const rhs = new BapNumericLiteralVisitor().manual({ intValue: 1 });
-    return new BapBinaryExpressionVisitor().manualAssign({ lhs, rhs, opType: opType });
+    return new BapBinaryExpressionVisitor().manualAssign({ lhs, rhs, opType: opType, debugLoc: node });
   }
 }
