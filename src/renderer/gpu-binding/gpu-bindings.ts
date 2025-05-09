@@ -21,6 +21,7 @@ export interface GpuFixedBinding extends GpuBindingBase {
   marshalStructCodeTypeSpec: CodeTypeSpec;
   marshal(dataVar: CodeVariable, bufferVars: BufferFiller, body: CodeStatementWriter): void;
   copyIntoUserVar(userVar: CodeVariable, body: CodeStatementWriter, dataVarGetter: (expr: CodeExpressionWriter) => void): void;
+  copyIntoDataVar(userValueGetter: (expr: CodeExpressionWriter) => void, body: CodeStatementWriter, dataVarSetter: (block: CodeStatementWriter) => CodeExpressionWriter): void;
   unmarshal(dataVar: CodeVariable, body: CodeStatementWriter, intoContext: BapPrototypeScope): void;
 }
 /** A buffer that must be bound as its own uniform. */

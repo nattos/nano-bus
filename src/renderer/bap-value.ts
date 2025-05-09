@@ -74,6 +74,7 @@ export interface BapGenerateOptions {
 export type BapSubtreeValue = BapLiteral|BapTypeLiteral|BapFunctionLiteral|BapCachedValue|BapEvalValue|BapStatementValue|BapUninitializedValue|BapErrorValue;
 export type BapWriteIntoExpressionFunc = (prepare: CodeStatementWriter) => ((result: CodeExpressionWriter) => void)|undefined;
 export type BapWriteIndexAccessIntoExpressionFunc = (prepare: CodeStatementWriter, indexValue: BapSubtreeValue) => ((result: CodeExpressionWriter) => void)|undefined;
+export type BapWriteIndexAccessWriteIntoExpressionFunc = (prepare: CodeStatementWriter, indexValue: BapSubtreeValue, valueValue: BapSubtreeValue) => ((block: CodeStatementWriter) => void)|undefined;
 export type BapWriteAsStatementFunc = (prepare: CodeStatementWriter) => ((block: CodeStatementWriter) => void)|undefined;
 
 export interface BapLiteral extends BapSubtreeValueBase {
@@ -88,6 +89,7 @@ export interface BapTypeLiteral extends BapSubtreeValueBase {
 
 export interface BapFunctionLiteral extends BapSubtreeValueBase {
   type: 'function';
+  debugName?: string;
   resolve(args: Array<BapSubtreeValue|undefined>, typeArgs: BapTypeSpec[]): BapSubtreeValue;
   generateGpuKernel?(): { token: CodeNamedToken; bindings: GpuBindings; }|undefined;
 }
@@ -119,6 +121,7 @@ export interface BapSubtreeValueBase {
   typeSpec?: BapTypeSpec;
   writeIntoExpression?: BapWriteIntoExpressionFunc;
   writeIndexAccessIntoExpression?: BapWriteIndexAccessIntoExpressionFunc;
+  writeIndexAccessWriteIntoExpression?: BapWriteIndexAccessWriteIntoExpressionFunc;
 }
 
 

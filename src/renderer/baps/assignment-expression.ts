@@ -24,9 +24,10 @@ export class BapAssignmentExpressionVisitor extends BapVisitor {
         const assignRefValue = refGen?.generateRead(context)
         const assignTypeSpec = assignRefValue.typeSpec;
         const value = valueGen?.generateRead(context, { willCoerceTo: assignTypeSpec });
+        const canCopy = value?.noCopy !== true;
 
         let debugValue: BapWriteIntoExpressionFunc|undefined;
-        if (debugLoc && context.scope.resolvedGpu?.kernel !== BapGpuKernelScope.Vertex) {
+        if (debugLoc && context.scope.resolvedGpu?.kernel !== BapGpuKernelScope.Vertex && canCopy) {
           const lineNumber = this.getNodeLineNumber(debugLoc);
           let readValue: BapCachedValue|undefined = undefined;
           if (assignRefValue.type === 'cached') {

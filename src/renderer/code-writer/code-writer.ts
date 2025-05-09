@@ -636,6 +636,7 @@ export enum CodeAttributeKey {
   GpuFragmentBindingLocation = 'GpuFragmentBindingLocation',
   GpuComputeBindingLocation = 'GpuComputeBindingLocation',
   GpuBindVertexIndex = 'GpuBindVertexIndex',
+  GpuBindThreadIndex = 'GpuBindThreadIndex',
   GpuWorkgroupSize = 'GpuWorkgroupSize',
 }
 
@@ -713,6 +714,13 @@ function writeAttribs(stream: CodeTextStream, context: CodeWriterContext, attrib
         stream.writeToken('builtin');
         stream.writeToken('(');
         stream.writeToken('vertex_index');
+        stream.writeToken(')');
+        writeWhitespace();
+      } else if (attrib.key === CodeAttributeKey.GpuBindThreadIndex) {
+        stream.writeToken('@');
+        stream.writeToken('builtin');
+        stream.writeToken('(');
+        stream.writeToken('local_invocation_index');
         stream.writeToken(')');
         writeWhitespace();
       } else if (attrib.key === CodeAttributeKey.GpuWorkgroupSize && attrib.intValue !== undefined) {

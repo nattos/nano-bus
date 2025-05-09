@@ -45,6 +45,7 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
         const body = this.child(funcBody);
         const funcLiteral: BapFunctionLiteral = {
           type: 'function',
+          debugName: functionName ?? 'anonymous',
           typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
           resolve: (args: BapSubtreeValue[], typeArgs: BapTypeSpec[]) => {
             // TODO: Perform overload resolution and generic template expansion.

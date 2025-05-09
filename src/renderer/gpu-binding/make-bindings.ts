@@ -105,9 +105,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
         });
       } else if (field.type.prototypeScope.arrayOfType) {
         const arrayOfType = field.type.prototypeScope.arrayOfType;
-        // console.log(arrayOfType);
         const elementBindings = makeGpuBindingsImpl.bind(this)(context, arrayOfType, options, thisVisitedSet);
-        // console.log(elementBindings);
         const elementBinding = elementBindings.bindings.find(b => b.type === 'fixed');
         if (elementBindings.bindings.length !== 1 || elementBinding?.type !== 'fixed') {
           this.logAssert(`Cannot bind array of type ${arrayOfType.debugName} as it is not blittable.`);
@@ -322,6 +320,50 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
           }
         });
       },
+      copyIntoDataVar: (userValueGetter, body: CodeStatementWriter, dataVarSetter) => {
+        self.asParent(() => {
+          const tmpVar = body.scope.allocateVariableIdentifier(marshalStructCodeTypeSpec, BapIdentifierPrefix.Local, `tmp`);
+          const tmpInit = body.writeVariableDeclaration(tmpVar).initializer;
+          for (const field of collectedCopyFields) {
+            let dataLeafGen: BapSubtreeGenerator | undefined = {
+              generateWrite: (context, value) => {
+                return (prepare) => {
+                  const valueWriter = value?.writeIntoExpression?.(prepare);
+                  return (block) => {
+                    if (field.marshalStructField) {
+                      valueWriter?.(tmpInit.writeAssignStructField(field.marshalStructField.identifierToken).value);
+                    }
+                  };
+                };
+              },
+              generateRead: () => {
+                return {
+                  type: 'error',
+                };
+              }
+            };
+            let userLeafGen: BapSubtreeGenerator | undefined = {
+              generateRead: () => {
+                return {
+                  type: 'cached',
+                  typeSpec: typeToBind,
+                  writeIntoExpression: () => {
+                    return (expr) => {
+                      userValueGetter(expr);
+                    };
+                  }
+                };
+              }
+            };
+            for (const part of field.path) {
+              userLeafGen = new BapPropertyAccessExpressionVisitor().manual({ thisGen: userLeafGen, identifierName: part.identifier });
+            }
+            const assignGen = new BapAssignmentExpressionVisitor().manual({ refGen: dataLeafGen, valueGen: userLeafGen });
+            assignGen?.generateRead(context)?.writeIntoExpression?.(body)?.(body.writeExpressionStatement().expr);
+          }
+          dataVarSetter(body).writeVariableReference(tmpVar);
+        });
+      },
     });
   }
   for (const binding of collectedArrays) {
@@ -378,6 +420,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
         unmarshalProxyPath(binding.path, intoContext, {
           generateRead: () => ({
             type: 'eval',
+            noCopy: true,
             typeSpec: shadowType,
             writeIntoExpression: (prepare) => {
               return (expr) => {
@@ -397,6 +440,24 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
               binding.elementBinding.copyIntoUserVar(userVar, prepare, dataVarGetter);
               return (expr) => {
                 expr.writeVariableReference(userVar);
+              };
+            },
+            writeIndexAccessWriteIntoExpression: (prepare, indexValue, valueValue) => {
+              const indexWriter = indexValue.writeIntoExpression?.(prepare);
+              const valueWriter = valueValue.writeIntoExpression?.(prepare);
+
+              const dataVarSetter = (block: CodeStatementWriter): CodeExpressionWriter => {
+                const assignStmt = block.writeAssignmentStatement();
+                const accessExpr = assignStmt.ref.writeIndexAccess();
+                indexWriter?.(accessExpr.index);
+                accessExpr.source.writeVariableReference(dataVar);
+                return assignStmt.value;
+              };
+              const valueGetter = (expr: CodeExpressionWriter) => {
+                valueWriter?.(expr);
+              };
+              return (block) => {
+                binding.elementBinding.copyIntoDataVar(valueGetter, block, dataVarSetter);
               };
             },
           }),
@@ -493,6 +554,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
         unmarshalProxyPath(binding.path, intoContext, {
           generateRead: () => ({
             type: 'eval',
+            noCopy: true,
             typeSpec: shadowType,
             writeIntoExpression: (prepare) => {
               return (expr) => {
@@ -531,6 +593,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
               return ({
                 generateRead: (context) => ({
                   type: 'function',
+                  debugName: 'Texture.sample',
                   typeSpec: self.types.primitiveTypeSpec(CodePrimitiveType.Function),
                   resolve: (args: Array<BapSubtreeValue|undefined>, typeArgs: BapTypeSpec[]): BapSubtreeValue => {
                     const inKernel = context.scope.resolvedGpu?.kernel;

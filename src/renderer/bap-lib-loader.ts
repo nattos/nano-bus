@@ -592,6 +592,7 @@ export class BapLibLoader extends BapRootContextMixin {
                 generateRead: (prepare) => {
                   const funcLiteral: BapFunctionLiteral = {
                     type: 'function',
+                    debugName: debugName,
                     typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
                     resolve: (args: BapSubtreeValue[], typeArgs: BapTypeSpec[]) => {
                       function toResolvedType(type: BapTypeSpec): ResolvedType {
@@ -664,6 +665,7 @@ export class BapLibLoader extends BapRootContextMixin {
               generateRead: (prepare) => {
                 const funcLiteral: BapFunctionLiteral = {
                   type: 'function',
+                  debugName: debugName,
                   typeSpec: this.types.primitiveTypeSpec(CodePrimitiveType.Function),
                   resolve: (args: BapSubtreeValue[], methodTypeArgs: BapTypeSpec[]) => {
                     const thisValue = bindScope.resolve(BapThisSymbol);

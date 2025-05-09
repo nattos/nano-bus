@@ -34,7 +34,7 @@ export class BapNewExpressionVisitor extends BapVisitor {
     if (!this.verifyNotNulllike(functionSignature, `Function has unresolved signature.`)) {
       return;
     }
-    console.log(this.tc.signatureToString(functionSignature));
+    // console.log(this.tc.signatureToString(functionSignature));
 
     const typeGen = this.types.type(node);
     const funcGen = new BapResolveConstructorVisitor().manual({ typeGen });

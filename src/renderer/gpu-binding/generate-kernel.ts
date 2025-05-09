@@ -1,6 +1,6 @@
 import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
-import { CodeAttributeDecl, CodeAttributeKey, CodeNamedToken, CodeScopeType, CodeTypeSpec, CodeVariable } from "../code-writer/code-writer";
+import { CodeAttributeDecl, CodeAttributeKey, CodeNamedToken, CodePrimitiveType, CodeScopeType, CodeTypeSpec, CodeVariable } from "../code-writer/code-writer";
 import { BapControlFlowScopeType, BapGpuKernelScope, BapPrototypeScope, BapReturnValueSymbol } from '../bap-scope';
 import { BapSubtreeGenerator, BapGenerateContext, BapTypeSpec } from '../bap-value';
 import { BapVariableDeclarationVisitor } from '../baps/variable-declaration';
@@ -118,7 +118,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     const rawFieldAccessWriters: Array<{ marshalFieldVar: CodeVariable; accessor: (thisGen: BapSubtreeGenerator) => BapSubtreeGenerator|undefined; }> = [];
     if (needsReturnValue && !hasReturnValue) {
       this.logAssert(`${isGpuVertexFunc} output is not concrete.`);
-    } else if (hasCustomReturnType && !isGpuFragmentFunc) {
+    } else if (needsReturnValue && hasCustomReturnType && !isGpuFragmentFunc) {
       const vertexOutStructIdentifier = context.globalWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Struct, `${functionName}_${stage}Out`);
       const vertexOutStructWriter = context.globalWriter.global.writeStruct(vertexOutStructIdentifier);
       const vertexOutStructScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Class);
@@ -156,7 +156,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     const vertexStructWriter = context.globalWriter.global.writeStruct(vertexStructIdentifier);
     const vertexStructScope = context.globalWriter.global.scope.createChildScope(CodeScopeType.Class);
     vertexStructWriter.touchedByCpu = false;
-    vertexStructWriter.touchedByGpu = true;
+    vertexStructWriter.touchedByGpu = !isGpuComputeFunc;
 
     const vertexParamIndex = isGpuComputeFunc ? -1 : 0;
     const threadIdParamIndex = isGpuComputeFunc ? 0 : isGpuVertexFunc ? 1 : -1;
@@ -316,7 +316,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       index: threadIdParamIndex,
       typeSpec: threadIdVar.typeSpec,
       codeVar: threadIdVar,
-      attribs: [ { key: CodeAttributeKey.GpuBindVertexIndex } ],
+      attribs: [ { key: isGpuComputeFunc ? CodeAttributeKey.GpuBindThreadIndex : CodeAttributeKey.GpuBindVertexIndex } ],
     });
     kernelParams.sort((a, b) => a.index - b.index);
     for (const kernelParam of kernelParams) {
@@ -327,8 +327,8 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     }
 
 
-
-    const returnVarWriter = returnVarGen?.generateRead(childContext);
+    const returnIsVoid = userReturnType === this.types.primitiveTypeSpec(CodePrimitiveType.Void);
+    const returnVarWriter = (returnIsVoid ? undefined : returnVarGen)?.generateRead(childContext);
     const callWriter = body?.generateRead(childContext);
 
     returnVarWriter?.writeIntoExpression?.(prepare);
@@ -339,18 +339,20 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     callWriter?.writeIntoExpression?.(innerPrepare);
     innerPrepare.writeBreakStatement();
 
-    const marshalReturnVar = childCodeScope.allocateVariableIdentifier(marshalReturnCodeTypeSpec, BapIdentifierPrefix.Local, 'marshalReturn');
-    const marshalReturnInit = prepare.writeVariableDeclaration(marshalReturnVar);
-    if (userReturnType?.libType) {
-      const returnValueWriter = returnValueGen?.generateRead(childContext).writeIntoExpression?.(prepare);
-      returnValueWriter?.(marshalReturnInit.initializer.writeExpression());
-    } else {
-      for (const prop of rawFieldAccessWriters) {
-        const fieldInitExpr = marshalReturnInit.initializer.writeAssignStructField(prop.marshalFieldVar.identifierToken).value;
-        prop.accessor(returnValueGen)?.generateRead(childContext).writeIntoExpression?.(prepare)?.(fieldInitExpr);
+    if (needsReturnValue) {
+      const marshalReturnVar = childCodeScope.allocateVariableIdentifier(marshalReturnCodeTypeSpec, BapIdentifierPrefix.Local, 'marshalReturn');
+      const marshalReturnInit = prepare.writeVariableDeclaration(marshalReturnVar);
+      if (userReturnType?.libType) {
+        const returnValueWriter = returnValueGen?.generateRead(childContext).writeIntoExpression?.(prepare);
+        returnValueWriter?.(marshalReturnInit.initializer.writeExpression());
+      } else {
+        for (const prop of rawFieldAccessWriters) {
+          const fieldInitExpr = marshalReturnInit.initializer.writeAssignStructField(prop.marshalFieldVar.identifierToken).value;
+          prop.accessor(returnValueGen)?.generateRead(childContext).writeIntoExpression?.(prepare)?.(fieldInitExpr);
+        }
       }
+      prepare.writeReturnStatement().expr.writeVariableReference(marshalReturnVar);
     }
-    prepare.writeReturnStatement().expr.writeVariableReference(marshalReturnVar);
     return {
       token: kernelIdentifier,
       bindings: optionsGpuBindings ?? { bindings: [] },

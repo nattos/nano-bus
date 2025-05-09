@@ -35,6 +35,9 @@ export class BapElementAccessExpressionVisitor extends BapVisitor {
         const fromValue = fromGen?.generateRead(context);
 
         return (prepare) => {
+          if (fromValue?.writeIndexAccessWriteIntoExpression && indexValue) {
+            return fromValue.writeIndexAccessWriteIntoExpression(prepare, indexValue, value);
+          }
           const valueWriter = value.writeIntoExpression?.(prepare);
           const indexWriter = indexValue?.writeIntoExpression?.(prepare);
           const fromWriter = fromValue?.writeIntoExpression?.(prepare);

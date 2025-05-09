@@ -25,7 +25,7 @@ export class BapVariableDeclarationVisitor extends BapVisitor {
           const newValue = newVar.initializer?.generateRead(context) ?? { type: 'uninitialized' };
           let varValue = newValue;
           // TODO: Determine copyability!!!
-          const isCopyable = true;
+          const isCopyable = newValue?.noCopy !== true;
           if (isCopyable) {
             let codeVar: CodeVariable;
             writerFuncs.push((prepare) => {

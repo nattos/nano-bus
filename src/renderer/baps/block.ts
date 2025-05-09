@@ -13,7 +13,6 @@ export class BapBlockVisitor extends BapVisitor {
           type: 'statement',
           writeIntoExpression: (prepare) => {
             for (const stmtValue of stmtValues) {
-              console.log(stmtValue);
               const stmtWriter = stmtValue?.writeIntoExpression?.(prepare);
               if (stmtWriter) {
                 stmtWriter(prepare.writeExpressionStatement().expr);
