@@ -26,6 +26,7 @@ const WEBGPU_GPU_RENAMES: Record<string, string> = {
   'BopLib::int3': 'vec3i',
   'BopLib::int4': 'vec4i',
   'BopLib::uint': 'u32',
+  'BopLib::uint3': 'vec3u',
   'BopLib::float': 'f32',
   'BopLib::float2': 'vec2f',
   'BopLib::float3': 'vec3f',
@@ -720,7 +721,7 @@ function writeAttribs(stream: CodeTextStream, context: CodeWriterContext, attrib
         stream.writeToken('@');
         stream.writeToken('builtin');
         stream.writeToken('(');
-        stream.writeToken('local_invocation_index');
+        stream.writeToken('global_invocation_id');
         stream.writeToken(')');
         writeWhitespace();
       } else if (attrib.key === CodeAttributeKey.GpuWorkgroupSize && attrib.intValue !== undefined) {

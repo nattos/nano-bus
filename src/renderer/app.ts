@@ -240,15 +240,16 @@ interface TriangleVertex {
 @computeShader
 function computeShader(threadId: int, options: { positions: TriangleVertex[], texture: Texture }) {
   const positions = options.positions;
-  positions[0] = { position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) };
-  positions[1] = { position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) };
-  positions[2] = { position: new float4(1, 1.1, 0, 1), color: new float4(1, 1, 1, 1) };
-  positions[0] = { position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) };
-  positions[1] = { position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) };
-  positions[2] = { position: new float4(1, 1.1, 0, 1), color: new float4(1, 0.6, 1, 1) };
+  // positions[0] = { position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) };
+  // positions[1] = { position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) };
+  // positions[2] = { position: new float4(1, 1.1, 0, 1), color: new float4(1, 1, 1, 1) };
+  // positions[0] = { position: new float4(0, 0, 0, 1), color: new float4(0, 0, 1, 1) };
+  // positions[1] = { position: new float4(1, 0, 0, 1), color: new float4(1, 0, 1, 1) };
+  // positions[2] = { position: new float4(1, 1.1, 0, 1), color: new float4(1, 0.6, 1, 1) };
   // const p = positions[2];
-  // const i: int = threadId;
-  // const p = positions[i];
+  const i: int = threadId;
+  // p.color.x = i;
+  const p = positions.at(i);
   // p.color.x = p.color.x + 1;
   // positions[2] = p;
   // positions[2].color.x = positions[2].color.x + 1;

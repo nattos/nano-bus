@@ -169,6 +169,11 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
       marshalCodeTypeSpec: CodeTypeSpec;
       rawFieldAccessWriters: Array<{ marshalFieldVar: CodeVariable; accessor: () => BapSubtreeGenerator|undefined; }>;
     }|undefined;
+    let threadIdBinding: {
+      userType: BapTypeSpec;
+      marshalCodeTypeSpec: CodeTypeSpec;
+      accessor: BapSubtreeGenerator;
+    }|undefined;
     // let fixedBindings: { paramName: string; userType: BapTypeSpec; bindings: GpuFixedBinding; }|undefined;
     for (const param of parameterEntries) {
       const paramType = this.types.type(param.type).generate(context);
@@ -212,7 +217,7 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
                   };
                 }
               };
-          },
+            },
           };
           rawFieldAccessWriters.push({
             marshalFieldVar: rawField,
@@ -227,6 +232,40 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
           rawFieldAccessWriters,
         };
       } else if (paramIndex === threadIdParamIndex) {
+        if (!this.verifyNotNulllike(paramType, `${isGpuVertexFunc} is not concrete.`)) {
+          continue;
+        }
+        const accessor: BapSubtreeGenerator = {
+          generateRead: () => {
+            return {
+              type: 'cached',
+              typeSpec: paramType,
+              writeIntoExpression: (prepare) => {
+                return (expr) => {
+                  if (isGpuComputeFunc) {
+                    expr.writeCast(paramType.codeTypeSpec).source.writePropertyAccess(context.globalWriter.makeInternalToken('x')).source.writeVariableReference(threadIdVar);
+                  } else {
+                    expr.writeCast(paramType.codeTypeSpec).source.writeVariableReference(threadIdVar);
+                  }
+                };
+              }
+            };
+          },
+        };
+        threadIdBinding = {
+          userType: paramType,
+          marshalCodeTypeSpec: CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken(isGpuComputeFunc ? 'BopLib::uint3' : 'BopLib::uint')),
+          accessor: accessor,
+        };
+        childContext.scope.declare(param.identifier, {
+          type: 'cached',
+          typeSpec: paramType,
+          writeIntoExpression: (prepare) => {
+            return (expr) => {
+              expr.writeVariableReference(threadIdUserVar);
+            };
+          },
+        });
       } else if (paramIndex === optionsParamIndex) {
         const optionsBopType = this.types.type(param.type).generate(context);
         if (!optionsBopType) {
@@ -303,7 +342,8 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
     const kernelParams = [];
     const vertexVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.marshalCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'vertex');
     const vertexUserVar = childCodeScope.allocateVariableIdentifier(vertexBindings?.userType.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'vertex');
-    const threadIdVar = childCodeScope.allocateVariableIdentifier(CodeTypeSpec.fromStruct(context.globalWriter.makeInternalToken('BopLib::uint')), BapIdentifierPrefix.Local, 'threadId');
+    const threadIdVar = childCodeScope.allocateVariableIdentifier(threadIdBinding?.marshalCodeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'threadId');
+    const threadIdUserVar = childCodeScope.allocateVariableIdentifier(threadIdBinding?.userType.codeTypeSpec ?? this.types.errorType.codeTypeSpec, BapIdentifierPrefix.Local, 'threadId');
     if (vertexBindings) {
       kernelParams.push({ index: vertexParamIndex, typeSpec: vertexVar.typeSpec, codeVar: vertexVar, attribs: [] });
       const vertexUserInit = prepare.writeVariableDeclaration(vertexUserVar);
@@ -312,12 +352,16 @@ export function makeKernelGenerator(this: BapVisitor, node: ts.FunctionDeclarati
         prop.accessor()?.generateRead(childContext).writeIntoExpression?.(prepare)?.(fieldInitExpr);
       }
     }
-    kernelParams.push({
-      index: threadIdParamIndex,
-      typeSpec: threadIdVar.typeSpec,
-      codeVar: threadIdVar,
-      attribs: [ { key: isGpuComputeFunc ? CodeAttributeKey.GpuBindThreadIndex : CodeAttributeKey.GpuBindVertexIndex } ],
-    });
+    if (threadIdBinding) {
+      kernelParams.push({
+        index: threadIdParamIndex,
+        typeSpec: threadIdVar.typeSpec,
+        codeVar: threadIdVar,
+        attribs: [ { key: isGpuComputeFunc ? CodeAttributeKey.GpuBindThreadIndex : CodeAttributeKey.GpuBindVertexIndex } ],
+      });
+      const varInit = prepare.writeVariableDeclaration(threadIdUserVar);
+      threadIdBinding.accessor.generateRead(childContext).writeIntoExpression?.(prepare)?.(varInit.initializer.writeExpression());
+    }
     kernelParams.sort((a, b) => a.index - b.index);
     for (const kernelParam of kernelParams) {
       if (kernelParam.index < 0) {

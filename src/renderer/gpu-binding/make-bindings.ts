@@ -485,6 +485,41 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
             isField: true,
           });
         }
+        prototypeScope.declare('at', {
+          gen: (bindScope) => {
+            return ({
+              generateRead: () => ({
+                type: 'function',
+                debugName: 'Array.at',
+                typeSpec: self.types.primitiveTypeSpec(CodePrimitiveType.Function),
+                resolve: (args: Array<BapSubtreeValue|undefined>, typeArgs: BapTypeSpec[]): BapSubtreeValue => {
+                  const indexValue = args.at(0);
+                  return {
+                    type: 'eval',
+                    typeSpec: basics.float4,
+                    writeIntoExpression: (prepare) => {
+                      const indexWriter = indexValue?.writeIntoExpression?.(prepare);
+                      const dataVarGetter = (expr: CodeExpressionWriter) => {
+                        const accessExpr = expr.writeIndexAccess();
+                        indexWriter?.(accessExpr.index);
+                        accessExpr.source.writeVariableReference(dataVar);
+                      };
+                      const userVar = prepare.scope.allocateVariableIdentifier(binding.userType.codeTypeSpec, BapIdentifierPrefix.Field, debugName + '_access');
+                      const userInit = prepare.writeVariableDeclaration(userVar);
+                      binding.elementBinding.copyIntoUserVar(userVar, prepare, dataVarGetter);
+                      return (expr) => {
+                        expr.writeVariableReference(userVar);
+                      };
+                    },
+                  };
+                },
+              })
+            });
+          },
+          genType: { generate: () => basics.int },
+          token: context.globalWriter.errorToken,
+          isField: true,
+        });
       }
     });
   }
