@@ -1,9 +1,4 @@
 
-export const WGSL_LIB_PREAMBLE_CODE = `
-diagnostic(off, derivative_uniformity);
-`;
-export const WGSL_LIB_CODE = `
-
 fn BopLib_float2_constructor(x: f32, y: f32) -> vec2f { return vec2f(x, y); }
 
 fn BopLib_float4_constructor(x: f32, y: f32, z: f32, w: f32) -> vec4f { return vec4f(x, y, z, w); }
@@ -61,5 +56,3 @@ fn BopLib_exportDebugOut(lineNumber: i32, length: i32, v0: f32, v1: f32, v2: f32
 fn BopLib_readDebugIn(entryIndex: i32) -> f32 {
   return BopLib_DebugIns_ValuesArray[entryIndex];
 }
-
-`;

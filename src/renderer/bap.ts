@@ -36,7 +36,7 @@ export interface FrameRunner {
 }
 
 export async function compile(code: string): Promise<CompileResult> {
-  const libCode = await (await fetch('/bop-lib-code.d.ts')).text();
+  const libCode = await (await fetch('libcode/@types/bop-lib-code.d.ts')).text();
 
   const compilerHost = new MemoryCompilerHost(new Map<string, string>([
     [ 'test.ts', code ],

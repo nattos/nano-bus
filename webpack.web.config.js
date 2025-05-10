@@ -12,7 +12,7 @@ module.exports = [
         {
           test: /\.ts?$/,
           use: 'ts-loader',
-          exclude: /node_modules/,
+          exclude: [/node_modules/, /src\/testcode/],
         },
         {
           test: /\.css$/i,
@@ -51,7 +51,7 @@ module.exports = [
           template: 'src/renderer/index.html' }),
       new CopyWebpackPlugin({
           patterns: [
-              { from: 'src/@types/bop-lib-code.d.ts', to: 'bop-lib-code.d.ts' },
+              { from: 'libcode/**', filter: (filepath) => !filepath.includes('tsconfig.json') },
           ],
       }),
     ],
@@ -60,6 +60,8 @@ module.exports = [
       static: path.join(__dirname, "dist"),
       compress: true,
       port: 4000,
+      watchFiles: ["libcode/*"],
+      hot: true,
     },
 
     performance: {

@@ -1,7 +1,31 @@
 import * as utils from '../../utils';
-import { WGSL_LIB_CODE, WGSL_LIB_PREAMBLE_CODE } from './bop-wgsl-lib';
+
+const WGSL_LIB_PREAMBLE_CODE = `
+diagnostic(off, derivative_uniformity);
+`;
 
 
+interface int {}
+interface int2 {
+  x: int;
+  y: int;
+}
+interface float {}
+interface float2 {
+  x: float;
+  y: float;
+}
+interface float3 {
+  x: float;
+  y: float;
+  z: float;
+}
+interface float4 {
+  x: float;
+  y: float;
+  z: float;
+  w: float;
+}
 
 
 class BopClass {
@@ -488,7 +512,6 @@ class BopTextureEntry {
 
 
 
-
 export class BufferFiller {
   readonly arrayBuffer;
   readonly dataView;
@@ -778,9 +801,10 @@ export class MTLInternals {
     const shadersReady = this.shadersReady = (async () => {
       const { device } = await ready;
       const code = await this.shaderCodeProvider.promise;
+      const wgslLibCode = await (await fetch('libcode/bop-wgsl-lib.wgsl')).text();
 
       const shaderModule = device?.createShaderModule({
-        code: WGSL_LIB_PREAMBLE_CODE + code + WGSL_LIB_CODE,
+        code: WGSL_LIB_PREAMBLE_CODE + code + wgslLibCode,
       });
       const compilationInfo = await shaderModule?.getCompilationInfo();
       if ((compilationInfo?.messages.length ?? 0) > 0) {

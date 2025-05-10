@@ -72,6 +72,7 @@ interface Vector4Constructor<TVector, TElement> {
   new (): TVector;
   new (value: TElement): TVector;
   new (x: TElement, y: TElement, z: TElement, w: TElement): TVector;
+  new (x: number, y: number, z: number, w: number): TVector;
   // new (x: TElement, y: TElement, zw: Swizzlable2<TElement>): TVector;
   // new (x: TElement, yz: Swizzlable2<TElement>, w: TElement): TVector;
   // new (xy: Swizzlable2<TElement>, z: TElement, w: TElement): TVector;
@@ -264,6 +265,7 @@ interface ClampToBorderAddressMode { addressMode: 4; }
 
 interface Array<T> {
   [n: int]: T;
+  [n: number]: T;
   length: int;
 
   push(value: T): void;
