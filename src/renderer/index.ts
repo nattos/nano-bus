@@ -1,3 +1,3 @@
-import { NanoApp } from './app';
+import { BusView } from './bus/bus-view';
 
-document.body.appendChild(new NanoApp());
+document.body.appendChild(new BusView());

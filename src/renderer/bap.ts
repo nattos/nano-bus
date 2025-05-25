@@ -35,6 +35,11 @@ export interface FrameRunner {
   runOneFrame(): Promise<void>;
 }
 
+export async function test() {
+  await utils.sleep(1000);
+  return;
+}
+
 export async function compile(code: string): Promise<CompileResult> {
   const libCode = await (await fetch('libcode/@types/bop-lib-code.d.ts')).text();
 

@@ -16,6 +16,7 @@ function computeShader(threadId: int, options: { positions: TriangleVertex[], te
   const i: int = threadId;
   // p.color.x = i;
   const p = positions.at(i);
+  // const p = positions[i];
   // p.color.x = p.color.x + 1;
   // positions[2] = p;
   // positions[2].color.x = positions[2].color.x + 1;

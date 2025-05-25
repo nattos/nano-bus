@@ -532,6 +532,14 @@ export function* appendIfMissing<T>(values: Iterable<T>, toAdd: T) {
   }
 }
 
+export function arrayRemove<T>(values: T[], toRemove: T) {
+  for (let i = values.length - 1; i >= 0; --i) {
+    if (values[i] === toRemove) {
+      values.splice(i, 1);
+    }
+  }
+}
+
 export function setAddRange<T>(set: Set<T>, values: Iterable<T>) {
   for (const value of values) {
     set.add(value);
@@ -593,6 +601,20 @@ export function putKeyValues<T extends {}>(toUpdate: T, ...entries: Array<[key: 
     (toUpdate as any)[key] = value;
   }
   return toUpdate;
+}
+
+export function groupBy<TKey, TValue>(values: TValue[], keyer: (value: TValue) => TKey) {
+  const result = new Map<TKey, TValue[]>();
+  for (const value of values) {
+    const key = keyer(value);
+    let keyValues = result.get(key);
+    if (!keyValues) {
+      keyValues = [];
+      result.set(key, keyValues);
+    }
+    keyValues.push(value);
+  }
+  return result;
 }
 
 export function visitRec<T>(roots: T[], getEdges: (node: T) => T[], visit: (node: T) => void) {
