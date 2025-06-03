@@ -11,15 +11,18 @@ export interface Newable<T> {
   new(shadowOf: T): T;
 }
 
-export interface Editable<T> {
+export interface Viewable<T> {
   shadowOf?: T;
   continuousEdit?: T;
+}
+
+export interface Editable<T> extends Viewable<T> {
   editType: Newable<T>;
 }
 
-export function view<T extends Editable<T>>(v: T): T;
-export function view<T extends Editable<T>>(v: T|undefined): T|undefined;
-export function view<T extends Editable<T>>(v: T|undefined): T|undefined {
+export function view<T extends Viewable<T>>(v: T): T;
+export function view<T extends Viewable<T>>(v: T|undefined): T|undefined;
+export function view<T extends Viewable<T>>(v: T|undefined): T|undefined {
   return v?.continuousEdit ?? v;
 }
 
@@ -30,8 +33,8 @@ export function edit<T extends Editable<T>>(v: T): T {
   return EditOperation.continuousEdit.ensureEditable(v);
 }
 
-export function canonical<T extends Editable<T>>(v: T): T;
-export function canonical<T extends Editable<T>>(v: T|undefined): T|undefined;
-export function canonical<T extends Editable<T>>(v: T|undefined): T|undefined {
+export function canonical<T extends Viewable<T>>(v: T): T;
+export function canonical<T extends Viewable<T>>(v: T|undefined): T|undefined;
+export function canonical<T extends Viewable<T>>(v: T|undefined): T|undefined {
   return v?.shadowOf ?? v;
 }

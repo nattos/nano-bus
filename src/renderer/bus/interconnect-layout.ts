@@ -1,8 +1,9 @@
-import { PinLayout } from "./device-layout";
-import { LaneLayout } from "./track-lane-layout";
+import { PinLayout } from "./pin-layout";
+import { LaneLayout } from "./lane-layout";
 
 export enum InterconnectType {
   Explicit = 'explicit',
+  Computed = 'computed',
   Implicit = 'implicit',
 }
 

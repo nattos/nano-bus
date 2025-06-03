@@ -1,12 +1,18 @@
 import * as utils from "../../utils";
 import { MultiMap } from "../collections";
-import { DeviceDecl, DeviceEditLayout, DeviceLayout, PinLayout, PinLocation, TypeSpec } from "./device-layout";
+import { DeviceDecl, DeviceEditLayout, DeviceLayout, PinDecl, TypeLayout, TypeSpec } from "./device-layout";
+import { BusRef, PinLayout, PinLocation, PinOptions, PinSource } from "./pin-layout";
 import { InterconnectLayout, InterconnectType, PathPoint } from "./interconnect-layout";
 import { ModuleLayout } from "./module-layout";
-import { LaneLayout, TrackLaneEditLayout, TrackLaneLayout } from "./track-lane-layout";
+import { isTrackLane, TrackLaneEditLayout, TrackLaneLayout } from "./track-lane-layout";
 import { canonical, edit, Editable, view } from "./utils";
+import { BusLaneLayout, isBusLane } from "./bus-lane-layout";
+import { LaneLayout } from "./lane-layout";
+import { EditableValue, IntrinsicValueType, IntrinsicValueValue, MultiValueState } from "./editable-value";
+import { action, observable, runInAction } from "mobx";
 
 interface ContinuousEditable<T> {
+  shadowOf?: ContinuousEditable<T>;
   continuousEdit?: T;
 }
 
@@ -14,13 +20,13 @@ export class EditOperation {
   static continuousEdit?: EditOperation;
 
   public readonly label: string;
-  public onLanesEdited?: (lanes: TrackLaneLayout[]) => void;
+  public onLanesEdited?: (lanes: LaneLayout[]) => void;
   public onDevicesEdited?: (devices: DeviceLayout[]) => void;
   public onInterconnectsEdited?: () => void;
 
   private lanesDirty = false;
   private autoInterconnectsDirty = false;
-  private readonly editedLanes = new Set<TrackLaneLayout>();
+  private readonly editedLanes = new Set<LaneLayout>();
   private readonly editedDevices = new Set<DeviceLayout>();
   private readonly dirtyInterconnects = new Set<InterconnectLayout>();
   private isContinuous;
@@ -49,11 +55,22 @@ export class EditOperation {
     return lane;
   }
 
+  insertBusLane(y?: number) {
+    const module = edit(this.module);
+    y ??= module.lanes.length;
+    const lane = new BusLaneLayout(this.module);
+    lane.y = y;
+    module.insertLane(lane);
+    this.lanesDirty = true;
+    return lane;
+  }
+
   insertDevice(init: { lane: TrackLaneLayout; x?: number; decl: DeviceDecl; }) {
     const module = edit(this.module);
     const lane = edit(init.lane);
     const x = (init.x ?? lane.devices.at(-1)?.maxX ?? 0) | 0;
-    const device = new DeviceLayout(this.module, init.decl);
+    const uniqueKey = crypto.randomUUID();
+    const device = new DeviceLayout(this.module, uniqueKey, init.decl);
     using _ = new DevicePositionUpdate(this, lane, device, { isNew: true });
     device.x = x;
     device.lane = canonical(lane);
@@ -61,10 +78,69 @@ export class EditOperation {
     module.insertDevice(device);
 
     // TODO: Make dynamic.
-    device.inPins.push(...init.decl.inPins.map(p => new PinLayout(device, PinLocation.In, p)));
-    device.outPins.push(...init.decl.outPins.map(p => new PinLayout(device, PinLocation.Out, p)));
-    device.inPins.forEach((p, i) => p.y = i);
-    device.outPins.forEach((p, i) => p.y = i);
+    const makePinLayout = (p: PinDecl, i: number, location: PinLocation): PinLayout => {
+      // TODO: Implement!!!
+      const tmpState = observable({
+        value: 0.1324,
+      });
+      const tmpOptions = observable({
+        minValue: 0.0,
+        maxValue: 1.0,
+      });
+
+      const pinType = this.makeType(p.type);
+      const editableValue: EditableValue = {
+        label: p.label,
+        valueType: pinType,
+        getObservableValue: <T extends IntrinsicValueType>(type: T): IntrinsicValueValue<T>|undefined => {
+          if (type === Number) {
+            return tmpState.value as any;
+          }
+        },
+        setObservableValue: action(<T extends IntrinsicValueType>(type: T, value: IntrinsicValueValue<T>) => {
+          if (type === Number) {
+            tmpState.value = value as any;
+          }
+        }),
+        resetObservableValue: action(() => {
+          tmpState.value = 0.1234;
+        }),
+        getObservableOptions: () => {
+          return tmpOptions;
+        },
+        multiValueState: MultiValueState.SingleValue
+      };
+
+      const source: PinSource = {
+        get x() {
+          return location === PinLocation.In ? view(device).x : view(device).maxX;
+        },
+        get laneLocalY() {
+          return i;
+        },
+        get lane() {
+          return view(device).lane;
+        },
+        get label() {
+          return p.label;
+        },
+        get sourceLabel() {
+          return view(device).decl.label;
+        },
+        get editableValue() {
+          return editableValue;
+        },
+        markDirty: () => {
+          this.editedDevices.add(canonical(device));
+          this.autoInterconnectsDirty = true;
+        },
+      };
+      const pin = new PinLayout(source, location, p);
+      pin.type = pinType;
+      return pin;
+    };
+    device.inPins.push(...init.decl.inPins.map((p, i) => makePinLayout(p, i, PinLocation.In)));
+    device.outPins.push(...init.decl.outPins.map((p, i) => makePinLayout(p, i, PinLocation.Out)));
 
     this.editedLanes.add(canonical(lane));
     this.editedDevices.add(canonical(device));
@@ -93,6 +169,12 @@ export class EditOperation {
 
     this.autoInterconnectsDirty = true;
     this.editedDevices.add(canonical(device));
+  }
+
+  setPinOptions(init: { pin: PinLayout; options: PinOptions }) {
+    const pin = edit(init.pin);
+    pin.options = structuredClone(init.options);
+    pin.source.markDirty();
   }
 
   connectPins(init: { fromOutPin: PinLayout; toInPin: PinLayout; type?: InterconnectType }) {
@@ -174,10 +256,12 @@ export class EditOperation {
     // Cleanup lanes.
     if (this.lanesDirty) {
       this.lanesDirty = false;
+      let nextY = 0;
       module.lanes.forEach((lane, i) => {
-        const newIndex = i;
-        const newY = i * 5;
         const viewLane = view(lane);
+        const newIndex = i;
+        const newY = nextY;
+        nextY += viewLane.height;
         if (viewLane.index === newIndex && viewLane.y === newY) {
           return;
         }
@@ -252,7 +336,8 @@ export class EditOperation {
       throw new Error(`Cannot reset non-continous edit ${this.label}`);
     }
     for (const edit of this.continuousEdits) {
-      edit.continuousEdit = undefined;
+      const canonicalValue = edit.shadowOf ?? edit;
+      canonicalValue.continuousEdit = undefined;
       if (edit instanceof TrackLaneLayout) {
         this.editedLanes.add(canonical(edit));
       }
@@ -274,8 +359,10 @@ export class EditOperation {
   private cleanupDevices() {
     const module = view(this.module);
     for (const lane of module.lanes) {
-      this.sortLaneDevices(lane);
-      this.splayLaneDevices(lane);
+      if (isTrackLane(lane)) {
+        this.sortLaneDevices(lane);
+        this.splayLaneDevices(lane);
+      }
     }
   }
 
@@ -321,18 +408,68 @@ export class EditOperation {
     const module = view(this.module);
     // For now, break all interconnects and reconnect by sweeping from left to right.
     for (const interconnect of Array.from(module.allInterconnects)) {
-      if (interconnect.type === InterconnectType.Implicit) {
+      if (interconnect.type === InterconnectType.Implicit || interconnect.type === InterconnectType.Computed) {
         this.disconnect({ interconnect });
       }
     }
 
-    const allDevices = module.lanes.flatMap(l => view(l).devices.map(d => view(d)));
+    const allBusLanes = module.lanes.filter(isBusLane).map(l => edit(l));
+    const allDevices = module.lanes.filter(isTrackLane).flatMap(l => view(l).devices.map(d => view(d)));
     allDevices.sort((a, b) => a.x - b.x);
 
-    const exported = MultiMap.basic<TypeSpec, PinLayout>();
+    function derefBusLane(busRef: BusRef, y: number) {
+      // TODO: Support bus names.
+      return allBusLanes.find(l => l.y >= y) ?? allBusLanes.at(-1);
+    }
+
+    const exported = MultiMap.basic<TypeSpec, { pin: PinLayout; exportAnywhere: boolean; }>();
+
+    // Reconnect computed pins, like bus exports.
+    for (const busLane of allBusLanes) {
+      busLane.clearImportPins();
+      busLane.clearExportPins();
+    }
     for (const rawDevice of allDevices) {
       const device = view(rawDevice);
-      const defaultY = view(device.lane)?.y ?? 0;
+      for (const rawOutPin of device.outPins) {
+        const outPin = view(rawOutPin);
+        if (outPin.options.connectToBus) {
+          const foundBusLane = derefBusLane(outPin.options.connectToBus, view(view(outPin.source).lane)?.y ?? 0);
+          if (foundBusLane) {
+            // Add a ephemeral pin on the bus lane, and connect to it.
+            const source: PinSource = {
+              get x() {
+                return view(outPin.source).x + 1;
+              },
+              get laneLocalY() {
+                return 0;
+              },
+              get lane() {
+                return foundBusLane;
+              },
+              get label() {
+                return view(outPin.source).label;
+              },
+              get sourceLabel() {
+                return view(outPin.source).sourceLabel;
+              },
+              get editableValue() {
+                return outPin.source.editableValue;
+              },
+              markDirty: () => {},
+            };
+            const newPin = new PinLayout(source, PinLocation.In, outPin.decl);
+            foundBusLane.insertImportPin(newPin);
+            this.connectPins({ fromOutPin: outPin, toInPin: newPin, type: InterconnectType.Computed });
+            exported.add(newPin.decl.type, { pin: newPin, exportAnywhere: true, });
+          }
+        }
+      }
+    }
+
+    // Now connect remaining implicit in/out pins.
+    for (const rawDevice of allDevices) {
+      const device = view(rawDevice);
 
       // Look for matching ins.
       const disconnectedPins = device.inPins.map(p => view(p)).filter(p => !p.interconnects.length);
@@ -348,14 +485,15 @@ export class EditOperation {
         }
         const candidates =
           Array.from(candidateSet)
-          .filter(c => !consumedExportsSet.has(c) && view(c.device).maxX  < device.x)
+          .filter(c => !consumedExportsSet.has(c.pin) && (c.exportAnywhere || view(c.pin.source).x  < device.x))
+          .map(c => c.pin)
           .toSorted((a, b) => {
-            const xDiff = view(b.device).x - view(a.device).x;
+            const xDiff = view(b.source).x - view(a.source).x;
             return xDiff;
           })
           .slice(0, toConnectPins.length)
           .toSorted((a, b) => {
-            const yDiff = (view(view(a.device).lane)?.y ?? defaultY) - (view(view(b.device).lane)?.y ?? defaultY);
+            const yDiff = view(a.source).laneLocalY - view(b.source).laneLocalY;
             return yDiff;
           });
         for (const [inPin, outPin] of utils.zip(toConnectPins, candidates)) {
@@ -363,8 +501,17 @@ export class EditOperation {
         }
       }
 
-      for (const outPin of device.outPins) {
-        exported.add(outPin.decl.type, outPin);
+      for (const rawOutPin of device.outPins) {
+        const outPin = view(rawOutPin);
+        let defaultIsExported = true;
+        if (outPin.options.connectToBus) {
+          // When a pin is exporting to a bus, implicit interconnects are disabled by default, and must be forced on.
+          defaultIsExported = false;
+        }
+        const isExported = outPin.options.allowImplicitInterconnects ?? defaultIsExported;
+        if (isExported) {
+          exported.add(outPin.decl.type, { pin: outPin, exportAnywhere: false });
+        }
       }
     }
   }
@@ -376,12 +523,12 @@ export class EditOperation {
   private computePath(interconnect: InterconnectLayout): PathPoint[]|undefined {
     const startPin = view(interconnect.start);
     const endPin = view(interconnect.end);
-    const startDevice = view(startPin.device);
-    const endDevice = view(endPin.device);
-    const startLane = view(startDevice.lane);
-    const endLane = view(endDevice.lane);
+    const startSource = view(startPin.source);
+    const endSource = view(endPin.source);
+    const startLane = view(startSource.lane);
+    const endLane = view(endSource.lane);
 
-    const midX = (Math.round((startDevice.maxX + endDevice.x) / 2)) | 0;
+    const midX = (Math.round((startSource.x + endSource.x) / 2)) | 0;
 
     if (!startLane || !endLane) {
       return;
@@ -389,29 +536,36 @@ export class EditOperation {
     const newPoints: PathPoint[] = [];
     newPoints.push({
       lane: startLane,
-      laneLocalY: startPin.y + 0.5,
-      x: startDevice.maxX,
+      laneLocalY: startSource.laneLocalY + 0.5,
+      x: startSource.x,
       xLocalX: 0,
     });
     newPoints.push({
       lane: startLane,
-      laneLocalY: startPin.y + 0.5,
+      laneLocalY: startSource.laneLocalY + 0.5,
       x: midX,
       xLocalX: 0.5,
     });
     newPoints.push({
       lane: endLane,
-      laneLocalY: endPin.y + 0.5,
+      laneLocalY: endSource.laneLocalY + 0.5,
       x: midX,
       xLocalX: 0.5,
     });
     newPoints.push({
       lane: endLane,
-      laneLocalY: endPin.y + 0.5,
-      x: endDevice.x,
+      laneLocalY: endSource.laneLocalY + 0.5,
+      x: endSource.x,
       xLocalX: 0,
     });
     return newPoints;
+  }
+
+  private makeType(typeSpec: TypeSpec) {
+    // TODO: Implement!
+    const type = new TypeLayout();
+    type.typeSpec = typeSpec;
+    return type;
   }
 }
 

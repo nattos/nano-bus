@@ -1,13 +1,13 @@
 import * as utils from "../../utils";
 import { MultiMap } from "../collections";
-import { PinLayout, DeviceLayout } from "./device-layout";
+import { DeviceLayout } from "./device-layout";
+import { PinLayout } from "./pin-layout";
+import { LaneEditLayout, LaneLayout } from "./lane-layout";
 import { ModuleLayout } from "./module-layout";
 import { canonical, view } from "./utils";
 
-export class LaneLayout {
-  index: number = 0;
-  y: number = 0;
-  height: number = 4;
+export function isTrackLane(lane?: LaneLayout): lane is TrackLaneLayout {
+  return canonical(lane) instanceof TrackLaneLayout;
 }
 
 export class TrackLaneLayout extends LaneLayout {
@@ -16,7 +16,7 @@ export class TrackLaneLayout extends LaneLayout {
 
   // readonly cellMap = MultiMap.basic<number, DeviceLayout>();
 
-  continuousEdit?: TrackLaneEditLayout;
+  continuousEdit: TrackLaneEditLayout|undefined;
   readonly editType = TrackLaneEditLayout;
 
   constructor(readonly module: ModuleLayout) {
@@ -34,28 +34,18 @@ export class TrackLaneLayout extends LaneLayout {
   }
 }
 
-export class TrackLaneEditLayout implements TrackLaneLayout {
-  constructor(readonly shadowOf: TrackLaneLayout) {}
+export class TrackLaneEditLayout extends LaneEditLayout implements TrackLaneLayout {
+  constructor(readonly shadowOf: TrackLaneLayout) {
+    super(shadowOf);
+  }
 
   get module(): ModuleLayout { return this.shadowOf.module; }
-
-  get index(): number { return this._index ?? this.shadowOf.index; }
-  set index(v: number) { this._index = v; }
-  private _index?: number;
-
-  get y(): number { return this._y ?? this.shadowOf.y; }
-  set y(v: number) { this._y = v; }
-  private _y?: number;
-
-  get height(): number { return this._height ?? this.shadowOf.height; }
-  set height(v: number) { this._height = v; }
-  private _height?: number;
 
   get devices(): DeviceLayout[] { return this._devices ?? this.shadowOf.devices; }
   private _devices?: DeviceLayout[];
 
-  readonly continuousEdit = this;
-  readonly editType = TrackLaneEditLayout;
+  get continuousEdit() { return this; }
+  get editType() { return TrackLaneEditLayout; }
 
   insertDevice(device: DeviceLayout, index?: number) {
     this._devices ??= Array.from(this.shadowOf.devices);

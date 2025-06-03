@@ -1,21 +1,22 @@
 import * as utils from "../../utils";
 import { DeviceLayout } from "./device-layout";
 import { InterconnectLayout } from "./interconnect-layout";
+import { LaneLayout } from "./lane-layout";
 import { TrackLaneLayout } from "./track-lane-layout";
 import { canonical } from "./utils";
 
 export class ModuleLayout {
-  lanes: TrackLaneLayout[] = [];
+  lanes: LaneLayout[] = [];
   allDevices: DeviceLayout[] = [];
   allInterconnects: InterconnectLayout[] = [];
 
   continuousEdit?: ModuleEditLayout;
   readonly editType = ModuleEditLayout;
 
-  insertLane(lane: TrackLaneLayout, index?: number) {
+  insertLane(lane: LaneLayout, index?: number) {
     this.lanes.splice(index ?? this.lanes.length, 0, canonical(lane));
   }
-  removeLane(lane: TrackLaneLayout) {
+  removeLane(lane: LaneLayout) {
     utils.arrayRemove(this.lanes, canonical(lane));
   }
 
@@ -37,8 +38,8 @@ export class ModuleLayout {
 export class ModuleEditLayout implements ModuleLayout {
   constructor(readonly shadowOf: ModuleLayout) {}
 
-  get lanes(): TrackLaneLayout[] { return this._lanes ?? this.shadowOf.lanes; }
-  private _lanes?: TrackLaneLayout[];
+  get lanes(): LaneLayout[] { return this._lanes ?? this.shadowOf.lanes; }
+  private _lanes?: LaneLayout[];
 
   get allDevices(): DeviceLayout[] { return this._allDevices ?? this.shadowOf.allDevices; }
   private _allDevices?: DeviceLayout[];

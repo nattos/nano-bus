@@ -7,7 +7,7 @@ import * as utils from '../../utils';
 import { DeviceDecl, DeviceLayout, TypeAssignable, TypeSpec } from './device-layout';
 import { EditOperation } from './edit-operation';
 import { ModuleLayout } from './module-layout';
-import { TrackLaneLayout } from './track-lane-layout';
+import { isTrackLane, TrackLaneLayout } from './track-lane-layout';
 import { InterconnectLayout, PathPoint } from './interconnect-layout';
 import { view } from './utils';
 import { APP_STYLES } from './app-styles';
@@ -45,7 +45,18 @@ export class DeviceView extends LitElement {
             const newX = startX - delta[0] / 20;
             const newY = Math.round(startY - delta[1] / (20 * 5)) | 0;
             const lanes = view(device.module).lanes;
-            const newLane = lanes.at(Math.max(0, Math.min(lanes.length - 1, newY))) ?? view(this.device.lane);
+
+            let newLane: TrackLaneLayout|undefined;
+            const laneSearchStart = Math.max(0, Math.min(lanes.length - 1, newY));
+            for (let searchY = laneSearchStart; searchY < lanes.length; ++searchY) {
+              const searchLane = lanes[searchY];
+              if (isTrackLane(searchLane)) {
+                newLane = searchLane;
+                break;
+              }
+            }
+            newLane ??= this.device.lane;
+
             edit.moveDevice({ device: this.device, x: newX, lane: newLane });
           });
         },
@@ -78,9 +89,9 @@ export class DeviceView extends LitElement {
   <div class="in-pins">
     ${device.inPins.map(p => html`
     <div class="pin">
-      <div class="pin-field">
-        <div class="pin-field-label">${p.decl.label}</div>
-        <div class="pin-field-value">1.125</div>
+      <div class="field">
+        <div class="field-label">${p.decl.label}</div>
+        <div class="field-value">1.125</div>
       </div>
     </div>
     `)}
@@ -88,9 +99,9 @@ export class DeviceView extends LitElement {
   <div class="out-pins">
     ${device.outPins.map(p => html`
     <div class="pin">
-      <div class="pin-field">
-        <div class="pin-field-label">${p.decl.label}</div>
-        <div class="pin-field-value">1.125</div>
+      <div class="pin-field  field">
+        <div class="field-label">${p.decl.label}</div>
+        <div class="field-value">1.125</div>
       </div>
     </div>
     `)}
