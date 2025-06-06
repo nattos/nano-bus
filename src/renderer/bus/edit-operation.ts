@@ -79,37 +79,69 @@ export class EditOperation {
 
     // TODO: Make dynamic.
     const makePinLayout = (p: PinDecl, i: number, location: PinLocation): PinLayout => {
-      // TODO: Implement!!!
-      const tmpState = observable({
-        value: 0.1324,
-      });
-      const tmpOptions = observable({
-        minValue: 0.0,
-        maxValue: 1.0,
-      });
+      // TODO: Move!!!
+
+      const editableValueFromType = (type: TypeSpec): EditableValue => {
+        const state = observable({});
+        const children: EditableValue[] = [];
+        addFieldRec(state, children, p.label, type);
+        return children[0];
+      }
+
+      const addFieldRec = (parentState: Record<string, any>, parentChildEditables: EditableValue[], key: string, fieldType: TypeSpec) => {
+        if (fieldType.struct) {
+          const childEditables: EditableValue[] = [];
+          const editableValue: EditableValue = {
+            label: key,
+            valueType: this.makeType(fieldType),
+            getChildren: () => { return childEditables; },
+            getObservableValue: <T extends IntrinsicValueType>(type: T): IntrinsicValueValue<T>|undefined => { return; },
+            setObservableValue: action(<T extends IntrinsicValueType>(type: T, value: IntrinsicValueValue<T>) => {}),
+            resetObservableValue: action(() => {}),
+            getObservableOptions: () => { return {}; },
+            multiValueState: MultiValueState.SingleValue
+          };
+          parentChildEditables.push(editableValue);
+
+          parentState[key] = {};
+          const childState = parentState[key];
+          for (const [k, v] of fieldType.struct.fields) {
+            addFieldRec(childState, childEditables, k, v);
+          }
+        } else {
+          parentState[key] = 0.3456;
+          const editableValue: EditableValue = {
+            label: key,
+            valueType: pinType,
+            getChildren: () => { return undefined; },
+            getObservableValue: <T extends IntrinsicValueType>(type: T): IntrinsicValueValue<T>|undefined => {
+              if (type === Number) {
+                return parentState[key] as any;
+              }
+            },
+            setObservableValue: action(<T extends IntrinsicValueType>(type: T, value: IntrinsicValueValue<T>) => {
+              if (type === Number) {
+                parentState[key] = value as any;
+              }
+            }),
+            resetObservableValue: action(() => {
+              parentState[key] = 0.2345;
+            }),
+            getObservableOptions: () => {
+              return {
+                minValue: 0.0,
+                maxValue: 1.0,
+              };
+            },
+            multiValueState: MultiValueState.SingleValue
+          };
+          parentChildEditables.push(editableValue);
+        }
+      };
 
       const pinType = this.makeType(p.type);
-      const editableValue: EditableValue = {
-        label: p.label,
-        valueType: pinType,
-        getObservableValue: <T extends IntrinsicValueType>(type: T): IntrinsicValueValue<T>|undefined => {
-          if (type === Number) {
-            return tmpState.value as any;
-          }
-        },
-        setObservableValue: action(<T extends IntrinsicValueType>(type: T, value: IntrinsicValueValue<T>) => {
-          if (type === Number) {
-            tmpState.value = value as any;
-          }
-        }),
-        resetObservableValue: action(() => {
-          tmpState.value = 0.1234;
-        }),
-        getObservableOptions: () => {
-          return tmpOptions;
-        },
-        multiValueState: MultiValueState.SingleValue
-      };
+      const editableValue: EditableValue = editableValueFromType(p.type);
+      // console.log(editableValue);
 
       const source: PinSource = {
         get x() {

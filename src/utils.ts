@@ -603,6 +603,25 @@ export function putKeyValues<T extends {}>(toUpdate: T, ...entries: Array<[key: 
   return toUpdate;
 }
 
+export function objectKeys<T extends Record<keyof T, unknown>>(o: T): Array<keyof T> {
+  return Object.keys(o) as any;
+}
+
+export function objectEntries<T extends Record<keyof T, T[keyof T]>>(o: T): Array<[keyof T, T[keyof T]]> {
+  return Object.entries(o) as any;
+}
+
+export function objectFromEntries<TValue, T extends Record<keyof T, TValue>>(e: Array<[keyof T, TValue]>): Record<keyof T, TValue> {
+  return Object.fromEntries(e) as any;
+}
+
+export function objectMapEntries<T extends Record<keyof T&string, T[keyof T]>, TValueOut>(o: T, f: (e: [keyof T&string, T[keyof T]]) => TValueOut): Record<keyof T, TValueOut>;
+export function objectMapEntries<T extends Record<keyof T&number, T[keyof T]>, TValueOut>(o: T, f: (e: [keyof T&number, T[keyof T]]) => TValueOut): Record<keyof T, TValueOut>;
+export function objectMapEntries<T extends Record<keyof T&symbol, T[keyof T]>, TValueOut>(o: T, f: (e: [keyof T&symbol, T[keyof T]]) => TValueOut): Record<keyof T, TValueOut>;
+export function objectMapEntries<T extends Record<keyof T, T[keyof T]>, TValueOut>(o: T, f: (e: [any, T[keyof T]]) => TValueOut): Record<keyof T, TValueOut> {
+  return objectFromEntries(objectEntries(o).map(([k, v]) => [k, f([k, v])]));
+}
+
 export function groupBy<TKey, TValue>(values: TValue[], keyer: (value: TValue) => TKey) {
   const result = new Map<TKey, TValue[]>();
   for (const value of values) {

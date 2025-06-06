@@ -21,6 +21,7 @@ export interface EditableValueOptions {
 export interface EditableValue {
   label: string;
   valueType: TypeLayout;
+  getChildren(): EditableValue[]|undefined;
   getObservableValue<T extends typeof Number>(type: T): IntrinsicValueValue<T>|undefined;
   setObservableValue<T extends typeof Number>(type: T, value: IntrinsicValueValue<T>): void;
   resetObservableValue(): void;

@@ -14,9 +14,10 @@ import { APP_STYLES } from './app-styles';
 import { cssColorFromHash, Point } from './layout-utils';
 import { PointerDragOp } from '../components/pointer-drag-op';
 import { BusView } from './bus-view';
+import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 
 @customElement('bus-monitor-editor-panel')
-export class MonitorEditorPanel extends LitElement {
+export class MonitorEditorPanel extends MobxLitElement {
   static readonly styles = [
     APP_STYLES,
     css`

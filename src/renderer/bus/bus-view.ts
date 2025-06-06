@@ -30,6 +30,7 @@ import { InspectorEditorPanel } from './inspector-editor-panel-view';
 import { MonitorEditorPanel } from './monitor-editor-panel';
 import { SelectPaths } from './select-paths.ts';
 import { splitStartsWith } from '../strings';
+import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 // import * as bap from '../bap';
 // import { SharedMTLInternals } from '../runtime/bop-javascript-lib';
 
@@ -40,7 +41,7 @@ interface CodeLine {
 }
 
 @customElement('bus-view')
-export class BusView extends LitElement {
+export class BusView extends MobxLitElement {
   static readonly styles = [APP_STYLES];
   static instance?: BusView;
 
@@ -62,26 +63,80 @@ export class BusView extends LitElement {
   connectedCallback(): void {
     super.connectedCallback();
 
-    const floatType: TypeSpec = {
-      label: 'float',
-      isAssignableFrom(other: TypeSpec) { return other === this ? TypeAssignable.SameType : TypeAssignable.NotAssignable; }
+    const makePrimitiveGroup = <T extends Record<string, boolean>>(
+      init: {
+        type: string;
+      },
+      types: T,
+    ): Record<keyof T, TypeSpec> => {
+      const entries = utils.objectMapEntries(types, ([k, v]) => {
+        const newType: TypeSpec = {
+          label: k,
+          primitive: {
+            type: init.type,
+          },
+          isAssignableFrom: (other: TypeSpec) => {
+            if (other === newType) {
+              return TypeAssignable.SameType;
+            }
+            if (typeSet.has(other)) {
+              return TypeAssignable.WithCoersion;
+            }
+            return TypeAssignable.NotAssignable;
+          }
+        };
+        return newType;
+      });
+      const typeSet = new Set(Object.values(entries));
+      return entries;
     };
-    const float2Type: TypeSpec = {
-      label: 'float2',
-      isAssignableFrom(other: TypeSpec) { return other === this ? TypeAssignable.SameType : TypeAssignable.NotAssignable; }
+
+    const { float: floatType } = makePrimitiveGroup({ type: 'float' }, { 'float': true });
+    const { float2: float2Type } = makePrimitiveGroup({ type: 'float2' }, { 'float2': true });
+    const { float4: float4Type, color: colorType } = makePrimitiveGroup({ type: 'float4' }, {
+      'float4': true,
+      'color': true,
+    });
+    const { ['Texture']: textureType } = makePrimitiveGroup({ type: 'Texture' }, { ['Texture']: true });
+
+
+    const makeStructType = <T extends Record<string, TypeSpec>>(
+      init: {
+        label: string;
+      },
+      fields: T,
+    ): TypeSpec => {
+      const newType: TypeSpec = {
+        label: init.label,
+        struct: {
+          fields: new Map(Object.entries(fields))
+        },
+        isAssignableFrom(other: TypeSpec) {
+          return other === newType ? TypeAssignable.SameType : TypeAssignable.NotAssignable;
+        }
+      };
+      return newType;
     };
-    const float4Type: TypeSpec = {
-      label: 'float4',
-      isAssignableFrom(other: TypeSpec) { return other === this ? TypeAssignable.SameType : other === colorType ? TypeAssignable.WithCoersion : TypeAssignable.NotAssignable; }
-    };
-    const colorType: TypeSpec = {
-      label: 'color',
-      isAssignableFrom(other: TypeSpec) { return other === this ? TypeAssignable.SameType : other === float4Type ? TypeAssignable.WithCoersion : TypeAssignable.NotAssignable; }
-    };
-    const textureType: TypeSpec = {
-      label: 'Texture',
-      isAssignableFrom(other: TypeSpec) { return other === this ? TypeAssignable.SameType : TypeAssignable.NotAssignable; }
-    };
+
+
+    const findGradType = makeStructType(
+      {
+        label: 'FindGradData'
+      },
+      {
+        primaryColor: colorType,
+        primaryPoint: float2Type,
+        secondaryColor: colorType,
+        secondaryPoint: float2Type,
+      },
+    );
+    // const findGradType: TypeSpec = {
+    //   label: 'FindGradData',
+    //   isAssignableFrom(other: TypeSpec) { return other === this ? TypeAssignable.SameType : TypeAssignable.NotAssignable; }
+    // };
+
+
+
 
     const textureInDecl: DeviceDecl = {
       label: 'texture in',
@@ -92,10 +147,6 @@ export class BusView extends LitElement {
       label: 'texture out',
       inPins: [{ label: 'out', type: textureType }],
       outPins: [],
-    };
-    const findGradType: TypeSpec = {
-      label: 'FindGradData',
-      isAssignableFrom(other: TypeSpec) { return other === this ? TypeAssignable.SameType : TypeAssignable.NotAssignable; }
     };
     const findColorGradDecl: DeviceDecl = {
       label: 'find color grad',
@@ -193,7 +244,7 @@ export class BusView extends LitElement {
         });
       }
     });
-    this.selectPaths.selectPath([ this.module.allDevices[2].uniqueKey ]);
+    this.selectPaths.selectPath([ this.module.allDevices[1].uniqueKey, 'outPin0' ]);
 
     // this.editorPanelsView.pushEditorPanel(new DeviceEditorPanel({ device: editDevice! }));
     // this.editorPanelsView.pushEditorPanel(new InspectorEditorPanel({ value: editDevice!.outPins[0].source.editableValue }));
@@ -246,7 +297,6 @@ export class BusView extends LitElement {
 
   render() {
     const module = view(this.module);
-    this.editorPanelsView.requestUpdate();
     return html`
 <div class="app mode-devices">
   <div class="lane-grid">

@@ -14,6 +14,13 @@ export enum TypeAssignable {
 export interface TypeSpec {
   label?: string;
   isAssignableFrom(other: TypeSpec): TypeAssignable;
+
+  primitive?: {
+    type: string;
+  };
+  struct?: {
+    fields: Map<string, TypeSpec>;
+  };
 }
 
 export interface PinDecl {

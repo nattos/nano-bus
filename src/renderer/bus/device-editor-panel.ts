@@ -16,9 +16,10 @@ import { PointerDragOp } from '../components/pointer-drag-op';
 import { BusView } from './bus-view';
 import { PinLayout } from './pin-layout';
 import { SelectPaths } from './select-paths.ts';
+import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 
 @customElement('bus-device-editor-panel')
-export class DeviceEditorPanel extends LitElement {
+export class DeviceEditorPanel extends MobxLitElement {
   static readonly styles = [
     APP_STYLES,
     css`

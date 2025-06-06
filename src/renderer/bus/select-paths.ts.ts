@@ -48,7 +48,7 @@ export class SelectPaths {
             }
             parent = newState;
           }
-          console.log(this.selectedPath, this.resolvedStates, this.stateMap);
+          // console.log(this.selectedPath, this.resolvedStates, this.stateMap);
         });
       }
       if (this.cleanupInFlight) {

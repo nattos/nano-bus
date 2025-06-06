@@ -19,9 +19,10 @@ import { EditableValue } from './editable-value';
 import { Inspector } from './inspector';
 import { FloatInspector } from './inspectors/float';
 import { SelectPaths } from './select-paths.ts';
+import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 
 @customElement('bus-inspector-editor-panel')
-export class InspectorEditorPanel extends LitElement {
+export class InspectorEditorPanel extends MobxLitElement {
   static readonly styles = [
     APP_STYLES,
     css`
@@ -40,15 +41,18 @@ export class InspectorEditorPanel extends LitElement {
   constructor(init?: { value?: EditableValue; }) {
     super();
     this.value = init?.value;
-    if (this.value?.valueType.typeSpec.label === 'float') {
-      this.inspector = new FloatInspector();
-    } else {
-      this.inspector = new StructInspector();
-    }
-    this.inspector.value = this.value;
   }
 
   render() {
+    if (!this.inspector || this.inspector?.value !== this.value) {
+      if (this.value?.valueType.typeSpec.primitive) {
+        this.inspector = new FloatInspector();
+      } else {
+        this.inspector = new StructInspector();
+      }
+      this.inspector.value = this.value;
+    }
+
     return html`
 <div class="editor-panel">
   <div class="panel-standard-container">

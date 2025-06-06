@@ -19,9 +19,10 @@ import { FloatInspector } from './inspectors/float';
 import { StructInspector } from './inspectors/struct';
 import { InspectorEditorPanel } from './inspector-editor-panel-view';
 import { SelectPaths } from './select-paths.ts';
+import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 
 @customElement('bus-editor-panels')
-export class EditorPanelsView extends LitElement {
+export class EditorPanelsView extends MobxLitElement {
   static readonly styles = [
     APP_STYLES,
     css`

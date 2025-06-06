@@ -18,9 +18,10 @@ import { DeviceEditorPanel } from './device-editor-panel';
 import { FloatInspector } from './inspectors/float';
 import { StructInspector } from './inspectors/struct';
 import { EditableValue } from './editable-value';
+import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 
 @customElement('bus-value-slider')
-export class ValueSlider extends LitElement {
+export class ValueSlider extends MobxLitElement {
   static readonly styles = [
     APP_STYLES,
     css`

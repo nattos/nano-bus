@@ -12,11 +12,12 @@ import { InterconnectLayout, PathPoint } from './interconnect-layout';
 import { view } from './utils';
 import { APP_STYLES } from './app-styles';
 import { cssColorFromHash, Point } from './layout-utils';
-import { PointerDragOp } from '../components/pointer-drag-op';
+import { CancelReason, PointerDragOp } from '../components/pointer-drag-op';
 import { BusView } from './bus-view';
+import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 
 @customElement('bus-device')
-export class DeviceView extends LitElement {
+export class DeviceView extends MobxLitElement {
   static readonly styles = [APP_STYLES];
 
   private dragOp?: PointerDragOp;
@@ -63,8 +64,13 @@ export class DeviceView extends LitElement {
         accept: () => {
           edit[Symbol.dispose]();
         },
-        cancel: () => {
+        cancel: (reason) => {
           edit.cancel();
+
+          if (reason === CancelReason.NoChange) {
+            // This was a click!
+            this.parent.selectPaths.selectPath(this.device.uniqueKey);
+          }
         },
       });
     };

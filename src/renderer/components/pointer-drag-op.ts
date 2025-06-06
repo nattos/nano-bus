@@ -1,5 +1,11 @@
 import { Point } from "../bus/layout-utils";
 
+export enum CancelReason {
+  NoChange = 'NoChange',
+  UserAction = 'UserAction',
+  Programmatic = 'Programmatic',
+}
+
 export class PointerDragOp {
   private isDisposed = false;
   private readonly pointerId;
@@ -14,7 +20,7 @@ export class PointerDragOp {
   constructor(e: PointerEvent, private readonly element: HTMLElement, readonly callbacks: {
       move?: (e: PointerEvent, delta: Point) => void,
       accept?: (e: PointerEvent, delta: Point) => void,
-      cancel?: () => void,
+      cancel?: (reason: CancelReason) => void,
       complete?: () => void,
       callMoveImmediately?: boolean,
       callMoveBeforeDone?: boolean,
@@ -66,7 +72,7 @@ export class PointerDragOp {
       this.callbacks?.move?.(e, delta);
     }
     if (!this.initialThresholdReached) {
-      this.callbacks?.cancel?.();
+      this.callbacks?.cancel?.(CancelReason.NoChange);
     } else {
       this.callbacks?.accept?.(e, delta);
     }
@@ -82,7 +88,7 @@ export class PointerDragOp {
     if (this.callbacks.callMoveBeforeDone) {
       this.callbacks?.move?.(e, delta);
     }
-    this.callbacks?.cancel?.();
+    this.callbacks?.cancel?.(CancelReason.UserAction);
     this.callbacks?.complete?.();
     this.finishDispose();
   }
@@ -91,7 +97,7 @@ export class PointerDragOp {
     if (this.isDisposed) {
       return;
     }
-    this.callbacks?.cancel?.();
+    this.callbacks?.cancel?.(CancelReason.Programmatic);
     this.callbacks?.complete?.();
     this.finishDispose();
   }
