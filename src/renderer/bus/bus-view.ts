@@ -140,7 +140,7 @@ export class BusView extends MobxLitElement {
 
     const textureInDecl: DeviceDecl = {
       label: 'texture in',
-      inPins: [],
+      inPins: [{ label: 'in', type: textureType }],
       outPins: [{ label: 'out', type: textureType }],
     };
     const textureOutDecl: DeviceDecl = {
@@ -195,6 +195,10 @@ export class BusView extends MobxLitElement {
         edit.setPinOptions({ pin: unpack.outPins[2], options: { connectToBus: {} } });
         edit.setPinOptions({ pin: unpack.outPins[3], options: { connectToBus: {} } });
 
+        edit.setPinOptions({ pin: textureIn.inPins[0], options: { connectToBus: {} } });
+        edit.setPinOptions({ pin: drawGrad.outPins[0], options: { connectToBus: {} } });
+        edit.setPinOptions({ pin: textureOut.inPins[0], options: { connectToBus: {} } });
+
         editDevice = drawGrad;
       });
     }
@@ -245,6 +249,83 @@ export class BusView extends MobxLitElement {
       }
     });
     this.selectPaths.selectPath([ this.module.allDevices[1].uniqueKey, 'outPin0' ]);
+
+    {
+      // Find all nodes transitively connected to outputs.
+      const sinkNode = this.module.allDevices[4];
+
+      // First gather connections. This lets us smartly break cycles later.
+      const inputsMap = new Map<DeviceLayout, DeviceLayout[]>();
+      for (const device of this.module.allDevices) {
+        const inputs: DeviceLayout[] = [];
+        for (const inPin of device.inPins) {
+          for (const interconnect of inPin.interconnects) {
+            const depDevice = interconnect.getExportLocation()?.device;
+            if (depDevice) {
+              inputs.push(depDevice);
+            }
+          }
+        }
+        inputsMap.set(device, inputs);
+      }
+
+      // Then collect all active devices, those transitively connected to outputs.
+      const activeDevices: DeviceLayout[] = [];
+      utils.visitRec(
+        [sinkNode],
+        node => inputsMap.get(node) ?? [],
+        node => {
+          activeDevices.push(node);
+        });
+
+      // Visit nodes, starting from top-left.
+      const breakCyclesOrder = activeDevices.toSorted((a, b) => {
+        const diffY = (a.lane?.y ?? 0) - (b.lane?.y ?? 0);
+        const diffX = a.x - b.x;
+        return diffY || diffX;
+      });
+
+      const consumedSet = new Set<DeviceLayout>();
+      for (const device of breakCyclesOrder) {
+        if (consumedSet.has(device)) {
+          continue;
+        }
+        const deviceInputs = inputsMap.get(device) ?? [];
+        const hadCycleInputs: DeviceLayout[] = [];
+        for (const deviceInput of deviceInputs) {
+          let hadCycle = false;
+          utils.visitRec(
+            [deviceInput],
+            node => {
+              const inputs = inputsMap.get(node) ?? [];
+              if (inputs.includes(device)) {
+                hadCycle = true;
+              }
+              return hadCycle ? [] : inputs;
+            },
+            node => {});
+          if (hadCycle) {
+            hadCycleInputs.push(deviceInput);
+          }
+        }
+        // Break cycles.
+        for (const hadCycleInput of hadCycleInputs) {
+          utils.arrayRemove(deviceInputs, hadCycleInput);
+          console.log(`Broke cycle between`, hadCycleInput.decl.label, '=>', device.decl.label);
+        }
+      }
+
+      // Traverse graph once again, with cycles broken.
+      const executionOrder: DeviceLayout[] = [];
+      utils.visitRec(
+        activeDevices,
+        node => inputsMap.get(node) ?? [],
+        node => {
+          executionOrder.push(node);
+        });
+      executionOrder.reverse();
+      console.log(`Execution order: `, executionOrder.map(d => d.decl.label));
+    }
 
     // this.editorPanelsView.pushEditorPanel(new DeviceEditorPanel({ device: editDevice! }));
     // this.editorPanelsView.pushEditorPanel(new InspectorEditorPanel({ value: editDevice!.outPins[0].source.editableValue }));

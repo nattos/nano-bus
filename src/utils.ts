@@ -481,7 +481,26 @@ export function* filterUnique<TValue, TKey>(values: Iterable<TValue>, keyFn?: ((
   }
 }
 
-export function* filterNulllike<TValue, TKey>(values: Iterable<TValue|undefined|null>): Iterable<TValue> {
+
+export function filterNulllike<TValue, TKey>(values: Array<TValue|undefined|null>): Array<TValue>;
+export function filterNulllike<TValue, TKey>(values: Iterable<TValue|undefined|null>): Iterable<TValue>;
+export function filterNulllike<TValue, TKey>(values: Array<TValue|undefined|null>|Iterable<TValue|undefined|null>): Array<TValue>|Iterable<TValue|undefined|null> {
+  if (values instanceof Array) {
+    return filterNulllikeArray(values);
+  }
+  return filterNulllikeIter(values);
+}
+export function filterNulllikeArray<TValue, TKey>(values: Array<TValue|undefined|null>): Array<TValue> {
+  const result: TValue[] = [];
+  for (const value of values) {
+    if (value === undefined || value === null) {
+      continue;
+    }
+    result.push(value);
+  }
+  return result;
+}
+export function* filterNulllikeIter<TValue, TKey>(values: Iterable<TValue|undefined|null>): Iterable<TValue> {
   for (const value of values) {
     if (value === undefined || value === null) {
       continue;
@@ -636,13 +655,13 @@ export function groupBy<TKey, TValue>(values: TValue[], keyer: (value: TValue) =
   return result;
 }
 
-export function visitRec<T>(roots: T[], getEdges: (node: T) => T[], visit: (node: T) => void) {
-  const visited = new Set<T>();
+export function visitRec<T>(roots: T[], getEdges: (node: T) => T[], visit: (node: T) => void, visitedSet?: Set<T>) {
+  visitedSet ??= new Set<T>();
   const inner = (node: T) => {
-    if (visited.has(node)) {
+    if (visitedSet.has(node)) {
       return;
     }
-    visited.add(node);
+    visitedSet.add(node);
     visit(node);
     for (const ref of getEdges(node)) {
       inner(ref);

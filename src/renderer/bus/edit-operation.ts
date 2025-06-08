@@ -1,7 +1,7 @@
 import * as utils from "../../utils";
 import { MultiMap } from "../collections";
 import { DeviceDecl, DeviceEditLayout, DeviceLayout, PinDecl, TypeLayout, TypeSpec } from "./device-layout";
-import { BusRef, PinLayout, PinLocation, PinOptions, PinSource } from "./pin-layout";
+import { BusRef, ExportLocation, PinLayout, PinLocation, PinOptions, PinSource } from "./pin-layout";
 import { InterconnectLayout, InterconnectType, PathPoint } from "./interconnect-layout";
 import { ModuleLayout } from "./module-layout";
 import { isTrackLane, TrackLaneEditLayout, TrackLaneLayout } from "./track-lane-layout";
@@ -165,6 +165,9 @@ export class EditOperation {
         markDirty: () => {
           this.editedDevices.add(canonical(device));
           this.autoInterconnectsDirty = true;
+        },
+        getExportLocation: (): ExportLocation => {
+          return { device: device, outPin: pin };
         },
       };
       const pin = new PinLayout(source, location, p);
@@ -489,6 +492,9 @@ export class EditOperation {
                 return outPin.source.editableValue;
               },
               markDirty: () => {},
+              getExportLocation: () => {
+                return outPin.source.getExportLocation?.();
+              },
             };
             const newPin = new PinLayout(source, PinLocation.In, outPin.decl);
             foundBusLane.insertImportPin(newPin);
@@ -510,26 +516,39 @@ export class EditOperation {
 
       const pinsByType = utils.groupBy(disconnectedPins, p => p.decl.type);
 
-      for (const [pinType, toConnectPins] of pinsByType.entries()) {
-        const candidateSet = exported.get(pinType);
-        if (!candidateSet) {
-          break;
-        }
-        const candidates =
-          Array.from(candidateSet)
-          .filter(c => !consumedExportsSet.has(c.pin) && (c.exportAnywhere || view(c.pin.source).x  < device.x))
-          .map(c => c.pin)
-          .toSorted((a, b) => {
-            const xDiff = view(b.source).x - view(a.source).x;
-            return xDiff;
-          })
-          .slice(0, toConnectPins.length)
-          .toSorted((a, b) => {
-            const yDiff = view(a.source).laneLocalY - view(b.source).laneLocalY;
-            return yDiff;
-          });
-        for (const [inPin, outPin] of utils.zip(toConnectPins, candidates)) {
-          this.connectPins({ fromOutPin: outPin, toInPin: inPin, type: InterconnectType.Implicit });
+      for (const [pinType, toConnectPinsAll] of pinsByType.entries()) {
+        const toConnectPinsBus = toConnectPinsAll.filter(p => p.options.connectToBus);
+        const toConnectPinsNoBus = toConnectPinsAll.filter(p => !p.options.connectToBus);
+        const toConnectPinSets = [
+          { toConnectPins: toConnectPinsBus, fromBusOnly: true },
+          { toConnectPins: toConnectPinsNoBus, fromBusOnly: false },
+        ];
+        for (const { toConnectPins, fromBusOnly: fromBusOnly } of toConnectPinSets) {
+          const candidateSet = exported.get(pinType);
+          if (!candidateSet) {
+            break;
+          }
+          const candidates =
+            Array.from(candidateSet)
+            .filter(c => !fromBusOnly || c.exportAnywhere)
+            .filter(c => !consumedExportsSet.has(c.pin) && (c.exportAnywhere || view(c.pin.source).x  < device.x))
+            .toSorted((a, b) => {
+              const xDiff = view(b.pin.source).x - view(a.pin.source).x;
+              const aValue = a.exportAnywhere ? 1 : 0;
+              const bValue = b.exportAnywhere ? 1 : 0;
+              const busDiff = aValue - bValue;
+              return busDiff || xDiff;
+            })
+            .slice(0, toConnectPins.length)
+            .map(c => c.pin)
+            .toSorted((a, b) => {
+              const yDiff = view(a.source).laneLocalY - view(b.source).laneLocalY;
+              return yDiff;
+            });
+          for (const [inPin, outPin] of utils.zip(toConnectPins, candidates)) {
+            this.connectPins({ fromOutPin: outPin, toInPin: inPin, type: InterconnectType.Implicit });
+            consumedExportsSet.add(outPin);
+          }
         }
       }
 

@@ -1,5 +1,5 @@
 import * as utils from "../../utils";
-import { TypeLayout, PinDecl } from "./device-layout";
+import { TypeLayout, PinDecl, DeviceLayout } from "./device-layout";
 import { EditableValue } from "./editable-value";
 import { InterconnectLayout } from "./interconnect-layout";
 import { LaneLayout } from "./lane-layout";
@@ -21,7 +21,13 @@ export interface PinSource {
   get sourceLabel(): string;
   get editableValue(): EditableValue|undefined;
   markDirty(): void;
+  getExportLocation?(): ExportLocation|undefined;
   continuousEdit?: PinSource;
+}
+
+export interface ExportLocation {
+  device: DeviceLayout;
+  outPin: PinLayout;
 }
 
 export interface PinOptions {

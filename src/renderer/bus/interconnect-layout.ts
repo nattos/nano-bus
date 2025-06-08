@@ -1,5 +1,6 @@
-import { PinLayout } from "./pin-layout";
+import { ExportLocation, PinLayout } from "./pin-layout";
 import { LaneLayout } from "./lane-layout";
+import { view } from "./utils";
 
 export enum InterconnectType {
   Explicit = 'explicit',
@@ -14,6 +15,10 @@ export class InterconnectLayout {
   readonly editType = InterconnectEditLayout;
 
   constructor(readonly start: PinLayout, readonly end: PinLayout, readonly type: InterconnectType) {}
+
+  getExportLocation(): ExportLocation|undefined {
+    return this.start.source.getExportLocation?.();
+  }
 }
 
 export class InterconnectEditLayout {
@@ -29,6 +34,10 @@ export class InterconnectEditLayout {
 
   readonly continuousEdit = this;
   readonly editType = InterconnectEditLayout;
+
+  getExportLocation() {
+    return this.shadowOf.getExportLocation();
+  }
 }
 
 export interface PathPoint {
