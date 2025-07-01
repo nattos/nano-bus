@@ -8,6 +8,7 @@ import { BapPrototypeScope, BapScope, BapThisSymbol } from './bap-scope';
 import { BapTypes } from './bap-types';
 import { BapRootContextMixin } from './bap-root-context-mixin';
 import { BapDebugInOuts } from './bap-debug-ins-outs';
+import { BapModuleExports } from './bap-module-exports';
 
 type AnyPossibleNode<TType extends ts.SyntaxKind> = ts.Node&{ readonly kind: TType };
 export type BapVisitorImpl<TNode> = BapVisitor&{ impl(node: TNode|Node): BapSubtreeGenerator|undefined; };
@@ -19,6 +20,7 @@ export interface BapVisitorRootContext {
   readonly tc: ts.TypeChecker;
   readonly types: BapTypes;
   readonly debugInOuts: BapDebugInOuts;
+  readonly moduleExports: BapModuleExports;
   readonly globals: {
     prepareFuncs: CodeVariable[];
   };

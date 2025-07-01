@@ -5,6 +5,14 @@ import { PinLayout } from "./pin-layout";
 import { TrackLaneLayout } from "./track-lane-layout";
 import { orRef } from "./utils";
 
+export interface CodeModule {
+}
+
+export interface CodeRef {
+  module: CodeModule;
+  identifier: string;
+}
+
 export enum TypeAssignable {
   NotAssignable = '',
   SameType = 'SameType',
@@ -25,11 +33,13 @@ export interface TypeSpec {
 
 export interface PinDecl {
   label: string;
+  codeRef: CodeRef;
   type: TypeSpec;
 }
 
 export interface DeviceDecl {
   label: string;
+  codeRef: CodeRef;
   inPins: PinDecl[];
   outPins: PinDecl[];
 }

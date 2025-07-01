@@ -168,6 +168,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
           debugName: part.bopType.debugName + '_shadow',
         };
         fieldVar = {
+          userCodeIdentifier: part.identifier,
           gen: (bindScope) => {
             return ({
               generateRead: () => ({
@@ -467,6 +468,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
         if (lengthVar && fixedDataVar) {
           const thisFixedDataVar = fixedDataVar;
           prototypeScope.declare('length', {
+            userCodeIdentifier: 'length',
             gen: (bindScope) => {
               return ({
                 generateRead: () => ({
@@ -486,6 +488,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
           });
         }
         prototypeScope.declare('at', {
+          userCodeIdentifier: 'at',
           gen: (bindScope) => {
             return ({
               generateRead: () => ({
@@ -605,6 +608,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
           const thisFixedDataVar = fixedDataVar;
 
           prototypeScope.declare('size', {
+            userCodeIdentifier: 'size',
             gen: (bindScope) => {
               return ({
                 generateRead: () => ({
@@ -624,6 +628,7 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
           });
 
           prototypeScope.declare('sample', {
+            userCodeIdentifier: 'sample',
             gen: (bindScope) => {
               return ({
                 generateRead: (context) => ({
@@ -683,6 +688,10 @@ function makeGpuBindingsImpl(this: BapVisitor, context: BapGenerateContext, type
   if (collectedArrays.length > 0 || collectedTextures.length > 0) {
     if (typeToBind.marshal) {
       typeToBind.marshal.blittable = false;
+    }
+  } else {
+    if (typeToBind.marshal) {
+      typeToBind.marshal.blittable = true;
     }
   }
 

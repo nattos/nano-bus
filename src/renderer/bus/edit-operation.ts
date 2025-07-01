@@ -166,8 +166,12 @@ export class EditOperation {
           this.editedDevices.add(canonical(device));
           this.autoInterconnectsDirty = true;
         },
-        getExportLocation: (): ExportLocation => {
-          return { device: device, outPin: pin };
+        getExportLocation: (): ExportLocation|undefined => {
+          if (location === PinLocation.Out) {
+            return { device: device, outPin: pin };
+          }
+          const interconnect = pin.interconnects?.at(0);
+          return interconnect?.getExportLocation();
         },
       };
       const pin = new PinLayout(source, location, p);

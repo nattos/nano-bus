@@ -18,6 +18,7 @@ interface Vector2Constructor<TVector, TElement> {
   new (): TVector;
   new (value: TElement): TVector;
   new (x: TElement, y: TElement): TVector;
+  new (x: number, y: number): TVector;
   // new (xy: Swizzlable2<TElement>): TVector;
   readonly zero: TVector;
   readonly one: TVector;

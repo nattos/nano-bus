@@ -134,6 +134,7 @@ export interface BapTypeGenerator {
 }
 
 export interface BapTypeSpec {
+  userCodeIdentifier?: string;
   prototypeScope: BapPrototypeScope;
   staticScope: BapPrototypeScope;
   typeParameters: string[];

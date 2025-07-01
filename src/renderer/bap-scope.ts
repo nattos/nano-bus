@@ -61,6 +61,7 @@ export interface BapPrototypeMember {
   gen: BapBindSubtreeGenerator;
   genType: BapTypeGenerator;
   token: CodeNamedToken;
+  userCodeIdentifier: string;
   isField: boolean;
 }
 

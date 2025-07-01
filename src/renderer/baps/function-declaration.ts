@@ -2,10 +2,12 @@ import ts from "typescript/lib/typescript";
 import { BapVisitor } from "../bap-visitor";
 import { CodePrimitiveType } from "../code-writer/code-writer";
 import { BapControlFlowScopeType, BapReturnValueSymbol } from '../bap-scope';
-import { BapSubtreeGenerator, BapFunctionLiteral, BapSubtreeValue, BapTypeSpec } from '../bap-value';
+import { BapSubtreeGenerator, BapFunctionLiteral, BapSubtreeValue, BapTypeSpec, BapGenerateContext, BapTypeGenerator } from '../bap-value';
 import { BapVariableDeclarationVisitor } from './variable-declaration';
 import { BapIdentifierExpressionVisitor } from './identifier-expression';
 import { makeKernelGenerator } from '../gpu-binding/generate-kernel';
+import { BapBasicTypeKey } from "../bap-types";
+import { BapStaticField, BapStaticType } from "../bap-exports";
 
 export class BapFunctionDeclarationVisitor extends BapVisitor {
   impl(node: ts.FunctionDeclaration): BapSubtreeGenerator|undefined {
@@ -17,6 +19,7 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
     }
     const funcBody = node.body;
     const functionName = node.name.text;
+    const isExported = !!node.modifiers?.find(m => m.kind === ts.SyntaxKind.ExportKeyword);
 
     const parameterEntries: Array<{ identifier: string, type: ts.Type, isAutoField: boolean }> = [];
     const funcType = this.tc.getTypeAtLocation(node);
@@ -29,11 +32,12 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
     }
     const returnType = signature.getReturnType();
 
+    const returnTypeGen = this.types.type(returnType);
     const returnVarVisitor = new BapVariableDeclarationVisitor();
     const returnVarGen = returnVarVisitor.manual({ newVars: [
       {
         identifier: BapReturnValueSymbol,
-        type: this.types.type(returnType),
+        type: returnTypeGen,
       }
     ] });
     const returnValueGen = new BapIdentifierExpressionVisitor().manual({ identifierName: BapReturnValueSymbol })!;
@@ -59,11 +63,12 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
             }
 
             const returnVarWriter = returnVarGen?.generateRead(childContext);
+            const returnTypeSpec = returnTypeGen.generate(childContext);
             const callWriter = body?.generateRead(childContext);
 
             return {
               type: 'literal',
-              typeSpec: returnVarWriter?.typeSpec,
+              typeSpec: returnTypeSpec,
               writeIntoExpression: (prepare) => {
                 returnVarWriter?.writeIntoExpression?.(prepare);
 
@@ -82,6 +87,53 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
         return funcLiteral;
       },
     };
+
+    if (isExported) {
+      // TODO: Generics.
+      const isGeneric = false;
+      const signatureGenerator = (context: BapGenerateContext, typeArgs: BapTypeSpec[]) => {
+        // TODO: Perform overload resolution and generic template expansion.
+        const childContext = context.withChildScope({ controlFlowScope: { type: BapControlFlowScopeType.Function } });
+        const parameters: BapStaticField[] = [];
+        for (let i = 0; i < parameterEntries.length; ++i) {
+          const parameterSignature = parameterEntries[i];
+          const parameterType = toStaticType(this.types.type(parameterSignature.type), context);
+          parameters.push({
+            identifier: parameterSignature.identifier,
+            type: parameterType ?? this.types.errorType,
+          });
+        }
+        const returnTypeSpec = toStaticType(returnTypeGen, childContext);
+        return {
+          identifier: functionName,
+          returnType: returnTypeSpec,
+          parameters: parameters,
+          isGeneric: isGeneric,
+        };
+      };
+      this.rootContext.moduleExports.addFunction({ identifier: functionName, isGeneric, signatureGenerator });
+    }
+
     return result;
   }
+}
+
+function toStaticType(typeGen: BapTypeGenerator, context: BapGenerateContext): BapStaticType {
+  const rootType = ((typeGen && 'generate' in typeGen) ? (typeGen?.generate(context)) : typeGen) ?? context.scope.rootContext.types.errorType;
+  if (rootType.libType) {
+    return {
+      isLibType: true,
+      isAnonymous: false,
+      identifier: rootType.libType.identifier as BapBasicTypeKey,
+    };
+  }
+  return {
+    isLibType: false,
+    isAnonymous: rootType.userCodeIdentifier === undefined,
+    identifier: rootType.userCodeIdentifier ?? '<anonymous>',
+    fields: rootType.prototypeScope.allFields.map(([key, member]) => ({
+      identifier: member.userCodeIdentifier,
+      type: toStaticType(member.genType, context)
+    })),
+  };
 }

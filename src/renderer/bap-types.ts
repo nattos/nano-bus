@@ -12,6 +12,8 @@ import { resolveBapFields } from './bap-utils';
 import { GpuFixedBinding } from './gpu-binding/gpu-bindings';
 import { BufferFiller } from './gpu-binding/buffer-filler';
 
+export type BapBasicTypeKey = keyof ReturnType<BapTypes['basic']>
+
 type StructureKey = string;
 
 export class BapTypes extends BapRootContextMixin {
@@ -30,6 +32,7 @@ export class BapTypes extends BapRootContextMixin {
 
     const makePrimitive = (primitiveType: CodePrimitiveType): BapTypeSpec => {
       return {
+        userCodeIdentifier: primitiveType,
         prototypeScope: new BapPrototypeScope(), // TODO: Fix!!!
         staticScope: new BapPrototypeScope(), // TODO: Fix!!!
         typeParameters: [],
@@ -58,6 +61,7 @@ export class BapTypes extends BapRootContextMixin {
       };
       const resolveInternalType = (identifier: string): BapTypeSpec => {
         return {
+          userCodeIdentifier: identifier,
           prototypeScope: new BapPrototypeScope(),
           staticScope: new BapPrototypeScope(),
           typeParameters: [],
@@ -249,7 +253,9 @@ export class BapTypes extends BapRootContextMixin {
       }
 
       const parentCodeScope = context.globalWriter.global.scope;
-      const shortName = this.stringifyType(tsType, { short: true }).slice(0, 24);
+      const isAnonymous = ('objectFlags' in tsType) && ((tsType.objectFlags as number) & ts.ObjectFlags.Anonymous);
+      const userCodeIdentifier = isAnonymous ? undefined : utils.stringEmptyToNull(tsType?.symbol?.name);
+      const shortName = userCodeIdentifier ?? this.stringifyType(tsType, { short: true }).slice(0, 24);
 
       // Create a new type.
       if (!this.check((tsType.flags & ts.TypeFlags.Any) !== ts.TypeFlags.Any, `Type ${utils.stringEmptyToNull(shortName) ?? 'any'} is disallowed.`)) {
@@ -336,7 +342,7 @@ export class BapTypes extends BapRootContextMixin {
         const structWriterOuter = context.globalWriter.global.writeStruct(identifier.identifierToken);
         structWriterOuter.touchedByProxy = {
           get touchedByCpu() { return true; },
-          get touchedByGpu() { return newType.marshal?.blittable ?? true; },
+          get touchedByGpu() { return newType.marshal?.blittable ?? false; },
         };
         const structWriter = structWriterOuter.body;
 
@@ -420,6 +426,7 @@ export class BapTypes extends BapRootContextMixin {
           };
 
           prototypeScope.declare(property.identifier, {
+            userCodeIdentifier: property.identifier,
             isField: true,
             token: fieldIdentifier.fieldVar.identifierToken,
             genType: { generate: () => fieldIdentifier.fieldType, debug: { debugName: fieldIdentifier.fieldType.debugName, fixed: fieldIdentifier.fieldType } },
@@ -445,6 +452,7 @@ export class BapTypes extends BapRootContextMixin {
         }
 
         const newType: BapTypeSpec = {
+          userCodeIdentifier: userCodeIdentifier,
           prototypeScope: prototypeScope,
           staticScope: staticScope,
           typeParameters: [],
@@ -480,6 +488,7 @@ export class BapTypes extends BapRootContextMixin {
       return oldTypeSpec;
     }
     const newTypeSpec: BapTypeSpec = {
+      userCodeIdentifier: t,
       prototypeScope: this.types.errorType.prototypeScope,
       staticScope: this.types.errorType.staticScope,
       typeParameters: [],

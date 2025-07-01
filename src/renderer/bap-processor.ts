@@ -42,7 +42,7 @@ function makeBapPassThroughVisitor<T extends ts.Node>(childNodeGetter: (node: T)
   return () => { return new BapPassThroughVisitor(childNodeGetter); };
 }
 
-export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitorRootContext, blockWriter: CodeStatementWriter, codeWriter: CodeWriter) {
+export function initBapProcessor() {
   BapVisitor.mapNodeType(ts.SyntaxKind.Block, BapBlockVisitor);
   BapVisitor.mapNodeTypeFunc(ts.SyntaxKind.ExpressionStatement, makeBapPassThroughVisitor((node: ts.ExpressionStatement) => node.expression));
   BapVisitor.mapNodeTypeFunc(ts.SyntaxKind.ParenthesizedExpression, makeBapPassThroughVisitor((node: ts.ParenthesizedExpression) => node.expression));
@@ -71,7 +71,9 @@ export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitor
   BapVisitor.mapNodeType(ts.SyntaxKind.ReturnStatement, BapReturnStatementVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.BreakStatement, BapBreakStatementVisitor);
   BapVisitor.mapNodeType(ts.SyntaxKind.ContinueStatement, BapContinueStatementVisitor);
+}
 
+export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitorRootContext, blockWriter: CodeStatementWriter, codeWriter: CodeWriter) {
   const context = BapGenerateContext.root({context: rootContext, globalWriter: codeWriter, isGpu: true});
   rootContext.types.debug = { debugContext: context };
   const libTypes = new BapLibLoader(rootContext).loadBopLib();
@@ -88,4 +90,8 @@ export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitor
   const logCallExpr = blockWriter.writeExpressionStatement().expr.writeMethodCall(codeWriter.makeInternalToken('log'));
   logCallExpr.source.writeIdentifier(codeWriter.makeInternalToken('console'));
   resultWriter?.(logCallExpr.addArg());
+
+  for (const exported of rootContext.moduleExports.functions) {
+    exported.staticSignature = exported.signatureGenerator?.(context, []);
+  }
 }

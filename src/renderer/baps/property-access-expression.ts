@@ -9,9 +9,6 @@ export class BapPropertyAccessExpressionVisitor extends BapVisitor {
       generateRead: (context, options) => {
         const thisValue = thisGen?.generateRead(context);
         const thisContext = context.withChildScope({ bindScope: { thisValue: thisValue } });
-        if (identifierName === 'sample') {
-          console.log(identifierName);
-        }
         return thisContext.scope.resolve(identifierName, { allowTypeParameters: options?.allowTypeParameters }) ?? { type: 'error' };
       },
       generateWrite: (context, value) => {

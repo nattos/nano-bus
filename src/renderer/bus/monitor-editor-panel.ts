@@ -27,13 +27,16 @@ export class MonitorEditorPanel extends MobxLitElement {
 `,
   ];
 
+  readonly canvas = document.createElement('canvas');
+
   constructor() {
     super();
+    this.canvas.id = 'gpu-canvas';
   }
 
   render() {
     return html`
-<canvas id="gpu-canvas"></canvas>
+${this.canvas}
 <div>1920x1080 rgba 8bpp unorm</div>
 `;
   }

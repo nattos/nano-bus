@@ -479,6 +479,7 @@ export class BapLibLoader extends BapRootContextMixin {
       staticScope.declare(
         typeParameter,
         {
+          userCodeIdentifier: typeParameter,
           isField: false,
           token: typeParameterCodeIdentifier,
           genType: { generate: (context: BapGenerateContext) => typeArg, debug: { debugName: typeParameter, fixed: typeArg } },
@@ -532,6 +533,7 @@ export class BapLibLoader extends BapRootContextMixin {
       declareInScope.declare(
         fieldName,
         {
+          userCodeIdentifier: fieldName,
           isField: true,
           token: fieldIdentifier,
           genType: { generate: (context: BapGenerateContext) => fieldType, debug: { debugName: fieldIdentifier.nameHint, fixed: fieldType } },
@@ -584,6 +586,7 @@ export class BapLibLoader extends BapRootContextMixin {
         declareInScope.declare(
           funcSymbol,
           {
+            userCodeIdentifier: funcName,
             isField: false,
             token: funcIdentifier.identifierToken,
             genType: { generate: (context: BapGenerateContext) => { return this.types.primitiveTypeSpec(CodePrimitiveType.Function); }, debug: { debugName: funcIdentifier.identifierToken.nameHint } },
@@ -658,6 +661,7 @@ export class BapLibLoader extends BapRootContextMixin {
         declareInScope.declare(
           funcSymbol,
           {
+            userCodeIdentifier: funcName,
             isField: false,
             token: funcIdentifier.identifierToken,
             genType: { generate: (context: BapGenerateContext) => { return this.types.primitiveTypeSpec(CodePrimitiveType.Function); }, debug: { debugName: funcIdentifier.identifierToken.nameHint } },

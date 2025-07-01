@@ -490,7 +490,7 @@ export function filterNulllike<TValue, TKey>(values: Array<TValue|undefined|null
   }
   return filterNulllikeIter(values);
 }
-export function filterNulllikeArray<TValue, TKey>(values: Array<TValue|undefined|null>): Array<TValue> {
+function filterNulllikeArray<TValue, TKey>(values: Array<TValue|undefined|null>): Array<TValue> {
   const result: TValue[] = [];
   for (const value of values) {
     if (value === undefined || value === null) {
@@ -500,7 +500,7 @@ export function filterNulllikeArray<TValue, TKey>(values: Array<TValue|undefined
   }
   return result;
 }
-export function* filterNulllikeIter<TValue, TKey>(values: Iterable<TValue|undefined|null>): Iterable<TValue> {
+function* filterNulllikeIter<TValue, TKey>(values: Iterable<TValue|undefined|null>): Iterable<TValue> {
   for (const value of values) {
     if (value === undefined || value === null) {
       continue;
@@ -724,4 +724,12 @@ export function isDeepStrictEqual(object1: any, object2: any) {
 
 function isObject(object: any) {
   return object != null && typeof object === 'object';
+}
+
+export function toBase16(bytes: ArrayBuffer) {
+  const hashArray = Array.from(new Uint8Array(bytes)); // convert buffer to byte array
+  const hashHex = hashArray
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return hashHex;
 }

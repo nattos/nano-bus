@@ -4,19 +4,15 @@ import { CodeVariable, CodeWriter, CodeWriterPlatform } from "./code-writer/code
 import { BapVisitorRootContext } from "./bap-visitor";
 import { BapTypes } from "./bap-types";
 import { BapIdentifierPrefix } from "./bap-constants";
-import { evalJavascriptInContext, PushInternalContinueFlag, SharedMTLInternals } from './runtime/bop-javascript-lib';
-import { writeSourceNodeCode } from './bap-processor';
+import { initBapProcessor, writeSourceNodeCode } from './bap-processor';
 import { BapDebugInOuts } from './bap-debug-ins-outs';
+import { BapModuleExports } from './bap-module-exports';
+import { BapDebugInEntry, BapStaticFunctionSignature } from './bap-exports';
 
 export interface CompiledDebugIn {
   lineNumber: number;
   valueLength: number;
   defaultValue: number[];
-}
-
-export interface CompiledDebugOut {
-  lineNumber: number;
-  expectedValueLength: number;
 }
 
 export interface CompileMessage {
@@ -25,23 +21,26 @@ export interface CompileMessage {
 
 export interface CompileResult {
   isRunnable: boolean;
-  frameRunner: FrameRunner;
+  exports: {
+    functions: BapStaticFunctionSignature[];
+  };
   messages: CompileMessage[];
-  debugIns: CompiledDebugIn[];
-  debugOuts: CompiledDebugOut[];
+  cpuPrepareCode: string;
+  cpuRunFrameCode: string;
+  gpuCode: string;
+  cpuDebugIns: BapDebugInEntry[];
+  gpuDebugIns: BapDebugInEntry[];
+  debugOuts: BapDebugInEntry[];
 }
 
-export interface FrameRunner {
-  runOneFrame(): Promise<void>;
-}
-
-export async function test() {
-  await utils.sleep(1000);
-  return;
-}
+const globalReady = utils.lazy(async () => {
+  const libCode = await (await fetch('libcode/@types/bop-lib-code.d.ts')).text();
+  initBapProcessor();
+  return { libCode };
+});
 
 export async function compile(code: string): Promise<CompileResult> {
-  const libCode = await (await fetch('libcode/@types/bop-lib-code.d.ts')).text();
+  const { libCode } = await globalReady();
 
   const compilerHost = new MemoryCompilerHost(new Map<string, string>([
     [ 'test.ts', code ],
@@ -53,33 +52,21 @@ export async function compile(code: string): Promise<CompileResult> {
   const {
     cpuPrepareCode, cpuRunFrameCode, gpuCode,
     cpuDebugIns, gpuDebugIns,
+    moduleExports,
   } = translateProgram({ program, sourceRoot: root });
-
-  let prepared = false;
-  const frameRunner: FrameRunner = {
-    async runOneFrame() {
-      if (!prepared) {
-        prepared = true;
-        SharedMTLInternals().loadShaderCode(gpuCode);
-        SharedMTLInternals().loadDebugIns(cpuDebugIns, gpuDebugIns);
-        const continueFlag = new utils.Resolvable<unknown>();
-        PushInternalContinueFlag(continueFlag);
-        evalJavascriptInContext(cpuPrepareCode);
-        await continueFlag.promise;
-      }
-      const continueFlag = new utils.Resolvable<unknown>();
-      PushInternalContinueFlag(continueFlag);
-      evalJavascriptInContext(cpuRunFrameCode);
-      await continueFlag.promise;
-    },
-  };
 
   return {
     isRunnable: true,
-    frameRunner,
-    messages: [],
-    debugIns: [],
+    exports: {
+      functions: utils.filterNulllike(moduleExports.functions.map(f => f.staticSignature)),
+    },
+    cpuPrepareCode: cpuPrepareCode,
+    cpuRunFrameCode: cpuRunFrameCode,
+    gpuCode: gpuCode,
+    cpuDebugIns: cpuDebugIns,
+    gpuDebugIns: gpuDebugIns,
     debugOuts: [],
+    messages: [],
   };
 }
 
@@ -111,6 +98,7 @@ function translateProgram(init: {
     sourceRoot: init.sourceRoot,
     tc: tc,
     get types() { return types; },
+    moduleExports: new BapModuleExports(),
     debugInOuts: new BapDebugInOuts(),
     globals: {
       prepareFuncs: prepareFuncs,
@@ -120,6 +108,7 @@ function translateProgram(init: {
 
   // Walk the tree.
   writeSourceNodeCode(init.sourceRoot, rootContext, blockWriter, writer);
+  console.log(rootContext.moduleExports.functions);
 
   for (const prepareFunc of prepareFuncs) {
     initFuncBlockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(prepareFunc.identifierToken);
@@ -156,7 +145,14 @@ const instanceVars = {};
   continueFlag?.resolve(undefined);
 })();
 `;
-  return { cpuPrepareCode, cpuRunFrameCode, gpuCode, cpuDebugIns: rootContext.debugInOuts.cpuIns, gpuDebugIns: rootContext.debugInOuts.gpuIns };
+  return {
+    cpuPrepareCode,
+    cpuRunFrameCode,
+    gpuCode,
+    cpuDebugIns: rootContext.debugInOuts.cpuIns,
+    gpuDebugIns: rootContext.debugInOuts.gpuIns,
+    moduleExports: rootContext.moduleExports,
+  };
 }
 
 

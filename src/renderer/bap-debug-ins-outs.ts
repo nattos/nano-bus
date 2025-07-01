@@ -1,10 +1,5 @@
+import { BapDebugInEntry } from "./bap-exports";
 import { BapGenerateContext, BapWriteIntoExpressionFunc } from "./bap-value";
-
-export interface BapDebugInEntry {
-  readonly lineNumber: number;
-  readonly isGpu: boolean;
-  readonly defaultValue: number;
-}
 
 export class BapDebugInOuts {
   readonly cpuIns: BapDebugInEntry[] = [];

@@ -162,6 +162,7 @@ const BopLib = {
       into.write_float(0, value);
     },
   },
+  get float2() { return BopFloat2; },
   get float4() { return BopFloat4; },
   get Array() { return BopArray; },
   Texture: {
@@ -185,6 +186,94 @@ const BopLib = {
 
   continueFlag: undefined as (utils.Resolvable<unknown>|undefined),
 };
+
+class BopFloat2 {
+  static readonly fields = {
+    x: BopLib.float,
+    y: BopLib.float,
+    z: BopLib.float,
+    w: BopLib.float,
+  };
+
+  static marshalByteStride: number = BopLib.float.marshalByteStride * 4;
+  static marshalBytesInto(value: BopFloat2, into: BufferFiller, indexOffset: number): void {
+    into.write_float2(0, value as unknown as float2);
+  }
+
+  x: number;
+  y: number;
+
+  constructor(x?: number, y?: number) {
+    if (x !== undefined && y === undefined) {
+      this.x = x;
+      this.y = x;
+    } else {
+      this.x = x ?? 0.0;
+      this.y = y ?? 0.0;
+    }
+  }
+  static ['constructor'](x?: number, y?: number) {
+    return new this(x, y);
+  }
+  static get_zero() { return new BopFloat2(0, 0); }
+  static get_one() { return new BopFloat2(1, 1); }
+  static get_x(self: BopFloat2) { return self.x; }
+  static get_y(self: BopFloat2) { return self.y; }
+  static set_x(self: BopFloat2, v: number) { self.x = v; }
+  static set_y(self: BopFloat2, v: number) { self.y = v; }
+
+  static operatorAdd(lhs: BopFloat2|number, rhs: BopFloat2|number) {
+    if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+      if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+        return new this(lhs + rhs.x, lhs + rhs.y);
+      } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+        return new this(lhs.x + rhs, lhs.y + rhs);
+      } else {
+        throw new Error();
+      }
+    }
+    return new this(lhs.x + rhs.x, lhs.y + rhs.y);
+  }
+  static operatorSubtract(lhs: BopFloat2|number, rhs: BopFloat2|number) {
+    if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+      if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+        return new this(lhs - rhs.x, lhs - rhs.y);
+      } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+        return new this(lhs.x - rhs, lhs.y - rhs);
+      } else {
+        throw new Error();
+      }
+    }
+    return new this(lhs.x - rhs.x, lhs.y - rhs.y);
+  }
+  static operatorMultiply(lhs: BopFloat2|number, rhs: BopFloat2|number) {
+    if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+      if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+        return new this(lhs * rhs.x, lhs * rhs.y);
+      } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+        return new this(lhs.x * rhs, lhs.y * rhs);
+      } else {
+        throw new Error();
+      }
+    }
+    return new this(lhs.x * rhs.x, lhs.y * rhs.y);
+  }
+  static operatorDivide(lhs: BopFloat2|number, rhs: BopFloat2|number) {
+    if (typeof(lhs) === 'number' || typeof(rhs) === 'number') {
+      if (typeof(lhs) === 'number' && typeof(rhs) !== 'number') {
+        return new this(lhs / rhs.x, lhs / rhs.y);
+      } else if (typeof(lhs) !== 'number' && typeof(rhs) === 'number') {
+        return new this(lhs.x / rhs, lhs.y / rhs);
+      } else {
+        throw new Error();
+      }
+    }
+    return new this(lhs.x / rhs.x, lhs.y / rhs.y);
+  }
+  static operatorNegate(lhs: BopFloat2) {
+    return new this(-lhs.x, -lhs.y);
+  }
+}
 
 class BopFloat4 {
   static readonly fields = {
