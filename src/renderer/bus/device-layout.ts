@@ -21,13 +21,13 @@ export enum TypeAssignable {
 
 export interface TypeSpec {
   label?: string;
-  isAssignableFrom(other: TypeSpec): TypeAssignable;
+  codeRef: CodeRef;
 
   primitive?: {
     type: string;
   };
   struct?: {
-    fields: Map<string, TypeSpec>;
+    fields: Record<string, TypeSpec>;
   };
 }
 
@@ -45,9 +45,7 @@ export interface DeviceDecl {
 }
 
 export class TypeLayout {
-  typeSpec: TypeSpec = {
-    isAssignableFrom(other: TypeSpec) { return TypeAssignable.NotAssignable; }
-  };
+  typeSpec: TypeSpec = { codeRef: { module: {}, identifier: '' } };
 }
 
 export class DeviceLayout {
@@ -63,7 +61,7 @@ export class DeviceLayout {
   toString() { return JSON.stringify(this.decl.label); }
 
   continuousEdit?: DeviceEditLayout;
-  readonly editType = DeviceEditLayout;
+  get editType() { return DeviceEditLayout; };
 
   constructor(readonly module: ModuleLayout, readonly uniqueKey: string, readonly decl: DeviceDecl) {}
 }
@@ -99,7 +97,7 @@ export class DeviceEditLayout implements DeviceLayout {
   toString(): string { return this.shadowOf.toString(); }
 
   readonly continuousEdit = this;
-  readonly editType = DeviceEditLayout;
+  get editType() { return DeviceEditLayout; };
 }
 
 

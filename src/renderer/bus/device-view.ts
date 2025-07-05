@@ -97,7 +97,7 @@ export class DeviceView extends MobxLitElement {
     <div class="pin">
       <div class="field">
         <div class="field-label">${p.decl.label}</div>
-        <div class="field-value">1.125</div>
+        <div class="field-value">${p.source.editableValue?.getObservableValue(Number)}</div>
       </div>
     </div>
     `)}
@@ -107,7 +107,7 @@ export class DeviceView extends MobxLitElement {
     <div class="pin">
       <div class="pin-field  field">
         <div class="field-label">${p.decl.label}</div>
-        <div class="field-value">1.125</div>
+        <div class="field-value">${p.source.editableValue?.getObservableValue(Number)}</div>
       </div>
     </div>
     `)}

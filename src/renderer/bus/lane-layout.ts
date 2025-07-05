@@ -6,6 +6,7 @@ import { ModuleLayout } from "./module-layout";
 import { canonical, view } from "./utils";
 
 export abstract class LaneLayout {
+  readonly abstract type: string;
   index: number = 0;
   y: number = 0;
   height: number = 5;
@@ -16,6 +17,8 @@ export abstract class LaneLayout {
 
 export class LaneEditLayout implements LaneLayout {
   constructor(readonly shadowOf: LaneLayout) {}
+
+  get type(): string { return this.shadowOf.type; }
 
   get index(): number { return this._index ?? this.shadowOf.index; }
   set index(v: number) { this._index = v; }

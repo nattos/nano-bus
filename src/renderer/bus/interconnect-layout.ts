@@ -12,7 +12,7 @@ export class InterconnectLayout {
   path: PathPoint[] = [];
 
   continuousEdit?: InterconnectEditLayout;
-  readonly editType = InterconnectEditLayout;
+  get editType() { return InterconnectEditLayout; };
 
   constructor(readonly start: PinLayout, readonly end: PinLayout, readonly type: InterconnectType) {}
 
@@ -33,7 +33,7 @@ export class InterconnectEditLayout {
   private _path?: PathPoint[];
 
   readonly continuousEdit = this;
-  readonly editType = InterconnectEditLayout;
+  get editType() { return InterconnectEditLayout; };
 
   getExportLocation() {
     return this.shadowOf.getExportLocation();

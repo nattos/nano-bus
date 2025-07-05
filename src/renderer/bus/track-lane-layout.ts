@@ -7,17 +7,19 @@ import { ModuleLayout } from "./module-layout";
 import { canonical, view } from "./utils";
 
 export function isTrackLane(lane?: LaneLayout): lane is TrackLaneLayout {
-  return canonical(lane) instanceof TrackLaneLayout;
+  return lane?.type === 'track';
 }
 
 export class TrackLaneLayout extends LaneLayout {
+  override readonly type = 'track' as const;
+
   readonly devices: DeviceLayout[] = [];
   // routePoints: RoutePointLayout[] = [];
 
   // readonly cellMap = MultiMap.basic<number, DeviceLayout>();
 
   continuousEdit: TrackLaneEditLayout|undefined;
-  readonly editType = TrackLaneEditLayout;
+  get editType() { return TrackLaneEditLayout; };
 
   constructor(readonly module: ModuleLayout) {
     super();
@@ -38,6 +40,8 @@ export class TrackLaneEditLayout extends LaneEditLayout implements TrackLaneLayo
   constructor(readonly shadowOf: TrackLaneLayout) {
     super(shadowOf);
   }
+
+  override get type() { return this.shadowOf.type; }
 
   get module(): ModuleLayout { return this.shadowOf.module; }
 

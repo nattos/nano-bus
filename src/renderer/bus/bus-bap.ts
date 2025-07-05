@@ -48,9 +48,17 @@ export class BusBapCompiler {
   private runDirty = false;
   private queuedRunCode?: string;
   private frameRunnerDirty = false;
-  private stateDirty = false;
+  private stateDirty?: {
+    stateChanged?: boolean;
+    frameRunnerChanged?: boolean;
+  };
 
-  onStateChanged?: (state: BusBapSerializedState, frameRunner: BusBapFrameRunnerState|undefined) => void;
+  onStateChanged?: (event: {
+    state: BusBapSerializedState;
+    stateChanged: boolean;
+    frameRunner?: BusBapFrameRunnerState;
+    frameRunnerChanged: boolean;
+  }) => void;
 
   serialize(): BusBapSerializedState {
     return structuredClone(this.state);
@@ -71,8 +79,14 @@ export class BusBapCompiler {
     await this.validateRunCode();
     await this.validateFrameRunner();
     if (this.stateDirty) {
-      this.stateDirty = false;
-      this.onStateChanged?.(this.state, this.frameRunnerState);
+      const event = {
+        state: this.state,
+        stateChanged: this.stateDirty.stateChanged ?? false,
+        frameRunner: this.frameRunnerState,
+        frameRunnerChanged: this.stateDirty.frameRunnerChanged ?? false,
+      };
+      this.stateDirty = undefined;
+      this.onStateChanged?.(event);
     }
   }
 
@@ -112,7 +126,8 @@ export class BusBapCompiler {
       },
     };
     this.runDirty = true;
-    this.stateDirty = true;
+    this.stateDirty ??= {};
+    this.stateDirty.stateChanged = true;
   }
 
   async setRunCode(runCode: string) {
@@ -158,7 +173,8 @@ export class BusBapCompiler {
       runner: runner,
     };
     this.frameRunnerDirty = true;
-    this.stateDirty = true;
+    this.stateDirty ??= {};
+    this.stateDirty.stateChanged = true;
   }
 
   private async validateFrameRunner() {
@@ -175,7 +191,8 @@ export class BusBapCompiler {
       runnerFunc: createFrameRunner(this.state.run.runner),
       codeLines: codeLines,
     };
-    this.stateDirty = true;
+    this.stateDirty ??= {};
+    this.stateDirty.frameRunnerChanged = true;
   }
 
   private async getCodeHash(code: string) {

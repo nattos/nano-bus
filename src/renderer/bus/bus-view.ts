@@ -5,15 +5,16 @@ import './inspector-editor-panel-view';
 import './monitor-editor-panel';
 import './value-slider';
 
+import * as utils from '../../utils';
+import * as idb from 'idb';
 import { css, html, LitElement, PropertyValueMap } from 'lit';
 import { customElement, query, property } from 'lit/decorators.js';
 import { classMap } from 'lit/directives/class-map.js';
 import { styleMap } from 'lit/directives/style-map.js';
 import { action, autorun, observable, makeObservable, runInAction } from 'mobx';
-import * as utils from '../../utils';
 import { CodeRef, DeviceDecl, DeviceLayout, PinDecl, TypeAssignable, TypeSpec } from './device-layout';
 import { EditOperation } from './edit-operation';
-import { ModuleLayout } from './module-layout';
+import { moduleFromJson, ModuleLayout, moduleToJson } from './module-layout';
 import { isTrackLane, TrackLaneLayout } from './track-lane-layout';
 import { InterconnectLayout, PathPoint } from './interconnect-layout';
 import { canonical, view } from './utils';
@@ -32,15 +33,16 @@ import { SelectPaths } from './select-paths.ts';
 import { splitStartsWith } from '../strings';
 import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 import { BapStaticFunctionSignature, BapStaticType } from '../bap-exports';
-import { BusBapCompiler } from './bus-bap';
-// import * as bap from '../bap';
-// import * as bopLib from '../runtime/bop-javascript-lib';
+import { BusBapCompiler, BusBapSerializedState } from './bus-bap';
 
 interface CodeLine {
   code: string;
   debugInValues: number[];
   debugOutValues: number[];
 }
+
+const COMPILE_CACHE_OBJECT_STORE = 'compile-cache';
+const COMPILE_CACHE_VERSION = '1';
 
 @customElement('bus-view')
 export class BusView extends MobxLitElement {
@@ -56,19 +58,66 @@ export class BusView extends MobxLitElement {
 
   @observable codeLines: CodeLine[] = [];
 
-  readonly module = new ModuleLayout();
+  module = new ModuleLayout();
   readonly deviceMap = new ShadowSet<DeviceLayout, DeviceView>({ shadowType: (d) => new DeviceView(this, d) });
+  private compileState: BusBapSerializedState = {};
+
+  readonly ready;
+  readonly localStore;
+  private readonly ioTaskQueue = new utils.OperationQueue();
 
   constructor() {
     super();
     BusView.instance = this;
     makeObservable(this);
 
-    this.compiler.onStateChanged = (state, runnerState) => {
-      if (state.module) {
-        this.moduleExportsTask.resolve(state.module.exports);
+    this.localStore = (async () => {
+      const localStore = await idb.openDB('nano-bus', 1, {
+        upgrade(database) {
+          database.createObjectStore(COMPILE_CACHE_OBJECT_STORE);
+        },
+      });
+      return localStore;
+    })();
+    this.ready = (async () => {
+      await this.loadCompileState();
+    })();
+
+    this.compiler.onStateChanged = (event) => {
+      if (event.state.module) {
+        this.moduleExportsTask.resolve(event.state.module.exports);
+      }
+      if (event.stateChanged) {
+        this.compileState = event.state;
+        this.saveCompileState();
+      }
+      if (event.frameRunner && event.frameRunnerChanged) {
+        // event.frameRunner.runnerFunc.runOneFrame();
       }
     };
+  }
+
+  private async loadCompileState() {
+    await this.ioTaskQueue.push(async () => {
+      const localStore = await this.localStore;
+      const serialized: BusBapSerializedState|undefined =
+          await localStore.get(COMPILE_CACHE_OBJECT_STORE, COMPILE_CACHE_VERSION);
+      if (!serialized) {
+        return;
+      }
+      this.compiler.deserialize(serialized);
+      if (serialized.module) {
+        this.moduleExportsTask.resolve(serialized.module.exports);
+      }
+    });
+  }
+
+  private async saveCompileState() {
+    await this.ioTaskQueue.push(async () => {
+      const localStore = await this.localStore;
+      const serialized = this.compileState ?? {};
+      await localStore.put(COMPILE_CACHE_OBJECT_STORE, serialized, COMPILE_CACHE_VERSION);
+    });
   }
 
   connectedCallback(): void {
@@ -84,18 +133,19 @@ export class BusView extends MobxLitElement {
         const entries = utils.objectMapEntries(types, ([k, v]) => {
           const newType: TypeSpec = {
             label: k,
+            codeRef: { module: {}, identifier: k, },
             primitive: {
               type: init.type,
             },
-            isAssignableFrom: (other: TypeSpec) => {
-              if (other === newType) {
-                return TypeAssignable.SameType;
-              }
-              if (typeSet.has(other)) {
-                return TypeAssignable.WithCoersion;
-              }
-              return TypeAssignable.NotAssignable;
-            }
+            // isAssignableFrom: (other: TypeSpec) => {
+            //   if (other === newType) {
+            //     return TypeAssignable.SameType;
+            //   }
+            //   if (typeSet.has(other)) {
+            //     return TypeAssignable.WithCoersion;
+            //   }
+            //   return TypeAssignable.NotAssignable;
+            // }
           };
           return newType;
         });
@@ -122,17 +172,19 @@ export class BusView extends MobxLitElement {
       const makeStructType = <T extends Record<string, TypeSpec>>(
         init: {
           label: string;
+          identifier: string;
         },
         fields: T,
       ): TypeSpec => {
         const newType: TypeSpec = {
           label: init.label,
+          codeRef: { module: {}, identifier: init.identifier, },
           struct: {
-            fields: new Map(Object.entries(fields))
+            fields: { ...fields }
           },
-          isAssignableFrom(other: TypeSpec) {
-            return other === newType ? TypeAssignable.SameType : TypeAssignable.NotAssignable;
-          }
+          // isAssignableFrom(other: TypeSpec) {
+          //   return other === newType ? TypeAssignable.SameType : TypeAssignable.NotAssignable;
+          // }
         };
         return newType;
       };
@@ -146,7 +198,7 @@ export class BusView extends MobxLitElement {
           if (oldType) {
             return oldType;
           }
-          const newType = makeStructType({ label: type.identifier }, Object.fromEntries(type.fields.map(t => [ t.identifier, typeFromStatic(t.type) ])));
+          const newType = makeStructType({ label: type.identifier, identifier: type.identifier }, Object.fromEntries(type.fields.map(t => [ t.identifier, typeFromStatic(t.type) ])));
           staticTypeMap.set(type.identifier, newType);
           return newType;
         }
@@ -190,85 +242,12 @@ export class BusView extends MobxLitElement {
         deviceDecls.set(exported.identifier, deviceDecl);
       }
 
-
-
-      // const findGradType = makeStructType(
-      //   {
-      //     label: 'FindGradData'
-      //   },
-      //   {
-      //     primaryColor: colorType,
-      //     primaryPoint: float2Type,
-      //     secondaryColor: colorType,
-      //     secondaryPoint: float2Type,
-      //   },
-      // );
-
-
-      // function putCodeRef<T extends { label: string; }>(init: T): T&{ codeRef: CodeRef } {
-      //   const toIdentifier = (label: string) => {
-      //     const parts = label.split(' ');
-      //     const camelParts = parts.map((part, i) => {
-      //       if (i === 0 || !part) {
-      //         return part;
-      //       }
-      //       return part[0].toUpperCase() + part.slice(1);
-      //     });
-      //     const camel = camelParts.join('');
-      //     return sanitizeIdentifier(camel);
-      //   };
-      //   const codeRef: CodeRef = { module: {}, identifier: toIdentifier(init.label) };
-      //   return { codeRef: codeRef, ...init };
-      // }
-
-      // const textureInDecl: DeviceDecl = putCodeRef({
-      //   label: 'texture in',
-      //   inPins: [],
-      //   // inPins: [putCodeRef({ label: 'in', type: textureType })],
-      //   outPins: [putCodeRef({ label: 'out', type: textureType })],
-      // });
-      // const textureOutDecl: DeviceDecl = putCodeRef({
-      //   label: 'texture out',
-      //   inPins: [putCodeRef({ label: 'out', type: textureType })],
-      //   outPins: [],
-      // });
-      // const findColorGradDecl: DeviceDecl = putCodeRef({
-      //   label: 'find color grad',
-      //   inPins: [
-      //     putCodeRef({ label: 'tex', type: textureType }),
-      //   ],
-      //   outPins: [putCodeRef({ label: 'out', type: findGradType })],
-      // });
-      // const drawGradDecl: DeviceDecl = putCodeRef({
-      //   label: 'draw grad',
-      //   inPins: [
-      //     putCodeRef({ label: 'primary color', type: colorType }),
-      //     putCodeRef({ label: 'primary point', type: float2Type }),
-      //     putCodeRef({ label: 'secondary color', type: colorType }),
-      //     putCodeRef({ label: 'secondary point', type: float2Type }),
-      //   ],
-      //   outPins: [putCodeRef({ label: 'out', type: textureType })],
-      // });
-
-      // const unpackDecl: DeviceDecl = putCodeRef({
-      //   label: 'unpack',
-      //   inPins: [
-      //     putCodeRef({ label: 'tex', type: findGradType }),
-      //   ],
-      //   outPins: [
-      //     putCodeRef({ label: 'primary color', type: colorType }),
-      //     putCodeRef({ label: 'primary point', type: float2Type }),
-      //     putCodeRef({ label: 'secondary color', type: colorType }),
-      //     putCodeRef({ label: 'secondary point', type: float2Type }),
-      //   ],
-      // });
       const textureInDecl = deviceDecls.get('textureIn')!;
       const findColorGradDecl = deviceDecls.get('findColorGrad')!;
       const unpackDecl = deviceDecls.get('unpack')!;
       const drawGradDecl = deviceDecls.get('drawGrad')!;
       const textureOutDecl = deviceDecls.get('textureOut')!;
 
-      let editDevice: DeviceLayout;
       {
         using edit = new EditOperation(this.module, { isContinuous: true });
         edit.write(() => {
@@ -284,14 +263,11 @@ export class BusView extends MobxLitElement {
           edit.setPinOptions({ pin: unpack.outPins[1], options: { connectToBus: {} } });
           edit.setPinOptions({ pin: unpack.outPins[2], options: { connectToBus: {} } });
           edit.setPinOptions({ pin: unpack.outPins[3], options: { connectToBus: {} } });
-
-          // edit.setPinOptions({ pin: textureIn.inPins[0], options: { connectToBus: {} } });
-          // edit.setPinOptions({ pin: drawGrad.outPins[0], options: { connectToBus: {} } });
-          // edit.setPinOptions({ pin: textureOut.inPins[0], options: { connectToBus: {} } });
-
-          editDevice = drawGrad;
         });
       }
+      // const json = moduleToJson(this.module);
+      // this.module = moduleFromJson(json);
+      // console.log(this.module);
 
       this.editorPanelsView.pushEditorPanel(this.monitorEditorPanel, { sticky: true });
 
@@ -456,37 +432,6 @@ export class BusView extends MobxLitElement {
         console.log(fullCode);
         this.compiler.setRunCode(fullCode);
       }
-
-      // this.editorPanelsView.pushEditorPanel(new DeviceEditorPanel({ device: editDevice! }));
-      // this.editorPanelsView.pushEditorPanel(new InspectorEditorPanel({ value: editDevice!.outPins[0].source.editableValue }));
-      // this.editorPanelsView.pushEditorPanel(new InspectorEditorPanel({ value: editDevice!.inPins[0].source.editableValue }));
-
-      // const floatDecl: DeviceDecl = {
-      //   label: 'float',
-      //   inPins: [],
-      //   outPins: [{ label: 'out', type: floatType }],
-      // };
-      // const addDecl: DeviceDecl = {
-      //   label: 'add',
-      //   inPins: [{ label: 'a', type: floatType }, { label: 'b', type: floatType }],
-      //   outPins: [{ label: 'out', type: floatType }],
-      // };
-
-      // {
-      //   using edit = new EditOperation(this.module, { isContinuous: true });
-      //   edit.write(() => {
-      //     const lane1 = edit.insertLane();
-      //     const lane2 = edit.insertLane();
-      //     const device1 = edit.insertDevice({ lane: lane1, x: 2, decl: addDecl });
-      //     const device2 = edit.insertDevice({ lane: lane1, x: 15, decl: addDecl });
-      //     const device3 = edit.insertDevice({ lane: lane2, x: 12, decl: addDecl });
-      //     const floatLiteralA = edit.insertDevice({ lane: lane2, x: 0, decl: floatDecl });
-      //     // edit.connectPins({ fromOutPin: floatLiteralA.outPins[0], toInPin: device2.inPins[0] });
-      //     // edit.connectPins({ fromOutPin: floatLiteralA.outPins[0], toInPin: device2.inPins[1] });
-      //     // edit.connectPins({ fromOutPin: floatLiteralA.outPins[0], toInPin: device3.inPins[0] });
-      //     edit.connectPins({ fromOutPin: floatLiteralA.outPins[0], toInPin: device3.inPins[1] });
-      //   });
-      // }
       this.deviceMap.sync(this.module.allDevices);
       this.requestUpdate();
     })();
@@ -502,35 +447,6 @@ export class BusView extends MobxLitElement {
 
       const moduleCode = await (await fetch('libcode/testcode/test.ts')).text();
       this.compiler.setModuleCode(moduleCode);
-
-      // const fullCode = await (await fetch('libcode/testcode/test.ts')).text() + '\n' + runCode;
-
-      // const fullCode = initialCode;
-      // const bap = await import('../bap');
-      // const withoutRunCode = await (await fetch('libcode/testcode/test.ts')).text();
-      // const precompileResult = await bap.compile(withoutRunCode);
-      // moduleExportsTask.resolve(precompileResult.exports);
-
-      // const runCode = await runCodeTask.promise;
-      // const withRunCode = withoutRunCode + '\n' + runCode;
-      // const codeLines = withRunCode.split('\n');
-      // const compileResult = await bap.compile(withRunCode);
-      // await compileResult.frameRunner.runOneFrame();
-      // console.log('done compileResult.frameRunner.runOneFrame()');
-      // // await compileResult.frameRunner.runOneFrame();
-      // // console.log('done compileResult.frameRunner.runOneFrame()');
-      // // await compileResult.frameRunner.runOneFrame();
-      // // console.log('done compileResult.frameRunner.runOneFrame()');
-      // // await compileResult.frameRunner.runOneFrame();
-      // // console.log('done compileResult.frameRunner.runOneFrame()');
-      // runInAction(() => {
-      //   this.codeLines.splice(0);
-      //   this.codeLines.push(...codeLines.map((codeLine) => ({
-      //     code: codeLine,
-      //     debugInValues: [],
-      //     debugOutValues: [0],
-      //   })));
-      // });
     });
   }
 
@@ -669,15 +585,6 @@ export class BusView extends MobxLitElement {
         ${segmentContents}
       </div>
     `;
-//       return html`
-// <div class="lane" style=${styleMap({ '--y': lane.y, '--height': lane.height })}>
-//   <div class="lane-device-track">
-//     ${lane.devices.map(this.renderDevice.bind(this))}
-//   </div>
-//   <div class="lane-gutter">
-//   </div>
-// </div>
-// `;
   }
 }
 

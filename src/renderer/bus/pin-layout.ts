@@ -52,7 +52,7 @@ export class PinLayout {
   }
 
   continuousEdit?: PinEditLayout;
-  readonly editType = PinEditLayout;
+  get editType() { return PinEditLayout; };
 
   constructor(readonly source: PinSource, readonly location: PinLocation, readonly decl: PinDecl) { }
 }
@@ -85,5 +85,5 @@ export class PinEditLayout implements PinLayout {
   }
 
   readonly continuousEdit = this;
-  readonly editType = PinEditLayout;
+  get editType() { return PinEditLayout; };
 }

@@ -469,6 +469,9 @@ export function* mapAll<TIn, TOut>(values: Iterable<TIn>, callback: (value: TIn)
   }
 }
 
+export function unique<TValue>(values: Iterable<TValue>): Array<TValue> {
+  return Array.from(new Set(values));
+}
 export function* filterUnique<TValue, TKey>(values: Iterable<TValue>, keyFn?: ((value: TValue) => TKey)): Iterable<TValue> {
   const addedSet = new Set<TKey|TValue>();
   for (const value of values) {

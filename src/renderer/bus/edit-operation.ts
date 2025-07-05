@@ -10,6 +10,7 @@ import { BusLaneLayout, isBusLane } from "./bus-lane-layout";
 import { LaneLayout } from "./lane-layout";
 import { EditableValue, IntrinsicValueType, IntrinsicValueValue, MultiValueState } from "./editable-value";
 import { action, observable, runInAction } from "mobx";
+import { BusLaneEphemeralPinSource, DevicePinSource, StorageEditableValue } from "./pin-sources";
 
 interface ContinuousEditable<T> {
   shadowOf?: ContinuousEditable<T>;
@@ -80,100 +81,12 @@ export class EditOperation {
     // TODO: Make dynamic.
     const makePinLayout = (p: PinDecl, i: number, location: PinLocation): PinLayout => {
       // TODO: Move!!!
-
-      const editableValueFromType = (type: TypeSpec): EditableValue => {
-        const state = observable({});
-        const children: EditableValue[] = [];
-        addFieldRec(state, children, p.label, type);
-        return children[0];
-      }
-
-      const addFieldRec = (parentState: Record<string, any>, parentChildEditables: EditableValue[], key: string, fieldType: TypeSpec) => {
-        if (fieldType.struct) {
-          const childEditables: EditableValue[] = [];
-          const editableValue: EditableValue = {
-            label: key,
-            valueType: this.makeType(fieldType),
-            getChildren: () => { return childEditables; },
-            getObservableValue: <T extends IntrinsicValueType>(type: T): IntrinsicValueValue<T>|undefined => { return; },
-            setObservableValue: action(<T extends IntrinsicValueType>(type: T, value: IntrinsicValueValue<T>) => {}),
-            resetObservableValue: action(() => {}),
-            getObservableOptions: () => { return {}; },
-            multiValueState: MultiValueState.SingleValue
-          };
-          parentChildEditables.push(editableValue);
-
-          parentState[key] = {};
-          const childState = parentState[key];
-          for (const [k, v] of fieldType.struct.fields) {
-            addFieldRec(childState, childEditables, k, v);
-          }
-        } else {
-          parentState[key] = 0.3456;
-          const editableValue: EditableValue = {
-            label: key,
-            valueType: pinType,
-            getChildren: () => { return undefined; },
-            getObservableValue: <T extends IntrinsicValueType>(type: T): IntrinsicValueValue<T>|undefined => {
-              if (type === Number) {
-                return parentState[key] as any;
-              }
-            },
-            setObservableValue: action(<T extends IntrinsicValueType>(type: T, value: IntrinsicValueValue<T>) => {
-              if (type === Number) {
-                parentState[key] = value as any;
-              }
-            }),
-            resetObservableValue: action(() => {
-              parentState[key] = 0.2345;
-            }),
-            getObservableOptions: () => {
-              return {
-                minValue: 0.0,
-                maxValue: 1.0,
-              };
-            },
-            multiValueState: MultiValueState.SingleValue
-          };
-          parentChildEditables.push(editableValue);
-        }
-      };
-
       const pinType = this.makeType(p.type);
-      const editableValue: EditableValue = editableValueFromType(p.type);
+      const editableValue = StorageEditableValue.fromType(p.label, p.type, { getTypeLayout: this.makeType.bind(this) });
       // console.log(editableValue);
 
-      const source: PinSource = {
-        get x() {
-          return location === PinLocation.In ? view(device).x : view(device).maxX;
-        },
-        get laneLocalY() {
-          return i;
-        },
-        get lane() {
-          return view(device).lane;
-        },
-        get label() {
-          return p.label;
-        },
-        get sourceLabel() {
-          return view(device).decl.label;
-        },
-        get editableValue() {
-          return editableValue;
-        },
-        markDirty: () => {
-          this.editedDevices.add(canonical(device));
-          this.autoInterconnectsDirty = true;
-        },
-        getExportLocation: (): ExportLocation|undefined => {
-          if (location === PinLocation.Out) {
-            return { device: device, outPin: pin };
-          }
-          const interconnect = pin.interconnects?.at(0);
-          return interconnect?.getExportLocation();
-        },
-      };
+      const source = new DevicePinSource(device, location, i);
+      source.storageEditableValue = editableValue;
       const pin = new PinLayout(source, location, p);
       pin.type = pinType;
       return pin;
@@ -476,30 +389,7 @@ export class EditOperation {
           const foundBusLane = derefBusLane(outPin.options.connectToBus, view(view(outPin.source).lane)?.y ?? 0);
           if (foundBusLane) {
             // Add a ephemeral pin on the bus lane, and connect to it.
-            const source: PinSource = {
-              get x() {
-                return view(outPin.source).x + 1;
-              },
-              get laneLocalY() {
-                return 0;
-              },
-              get lane() {
-                return foundBusLane;
-              },
-              get label() {
-                return view(outPin.source).label;
-              },
-              get sourceLabel() {
-                return view(outPin.source).sourceLabel;
-              },
-              get editableValue() {
-                return outPin.source.editableValue;
-              },
-              markDirty: () => {},
-              getExportLocation: () => {
-                return outPin.source.getExportLocation?.();
-              },
-            };
+            const source = new BusLaneEphemeralPinSource(foundBusLane, outPin);
             const newPin = new PinLayout(source, PinLocation.In, outPin.decl);
             foundBusLane.insertImportPin(newPin);
             this.connectPins({ fromOutPin: outPin, toInPin: newPin, type: InterconnectType.Computed });

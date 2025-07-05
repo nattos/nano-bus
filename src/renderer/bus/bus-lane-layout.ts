@@ -7,15 +7,17 @@ import { ModuleLayout } from "./module-layout";
 import { canonical, view } from "./utils";
 
 export function isBusLane(lane?: LaneLayout): lane is BusLaneLayout {
-  return canonical(lane) instanceof BusLaneLayout;
+  return lane?.type === 'bus';
 }
 
 export class BusLaneLayout extends LaneLayout {
+  override readonly type = 'bus' as const;
+
   readonly importPins: PinLayout[] = [];
   readonly exportPins: PinLayout[] = [];
 
   continuousEdit: BusLaneEditLayout|undefined;
-  readonly editType = BusLaneEditLayout;
+  get editType() { return BusLaneEditLayout; };
 
   constructor(readonly module: ModuleLayout) {
     super();
@@ -53,6 +55,8 @@ export class BusLaneEditLayout extends LaneEditLayout implements BusLaneLayout {
   constructor(readonly shadowOf: BusLaneLayout) {
     super(shadowOf);
   }
+
+  override get type() { return this.shadowOf.type; }
 
   get module(): ModuleLayout { return this.shadowOf.module; }
 
