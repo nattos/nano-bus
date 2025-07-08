@@ -1,9 +1,9 @@
 import * as utils from "../../utils";
 import { MultiMap } from "../collections";
-import { DeviceDecl, DeviceEditLayout, DeviceLayout, PinDecl, TypeLayout, TypeSpec } from "./device-layout";
+import { CodeRef, DeviceDecl, DeviceEditLayout, DeviceLayout, PinDecl, TypeSpec } from "./device-layout";
 import { BusRef, ExportLocation, PinLayout, PinLocation, PinOptions, PinSource } from "./pin-layout";
 import { InterconnectLayout, InterconnectType, PathPoint } from "./interconnect-layout";
-import { ModuleLayout } from "./module-layout";
+import { collectAll, ModuleLayout, toDeclMap } from "./module-layout";
 import { isTrackLane, TrackLaneEditLayout, TrackLaneLayout } from "./track-lane-layout";
 import { canonical, edit, Editable, view } from "./utils";
 import { BusLaneLayout, isBusLane } from "./bus-lane-layout";
@@ -11,6 +11,7 @@ import { LaneLayout } from "./lane-layout";
 import { EditableValue, IntrinsicValueType, IntrinsicValueValue, MultiValueState } from "./editable-value";
 import { action, observable, runInAction } from "mobx";
 import { BusLaneEphemeralPinSource, DevicePinSource, StorageEditableValue } from "./pin-sources";
+import { toCodeRefMapKey } from "./code-refs";
 
 interface ContinuousEditable<T> {
   shadowOf?: ContinuousEditable<T>;
@@ -24,6 +25,8 @@ export class EditOperation {
   public onLanesEdited?: (lanes: LaneLayout[]) => void;
   public onDevicesEdited?: (devices: DeviceLayout[]) => void;
   public onInterconnectsEdited?: () => void;
+  public onCommitted?: () => void;
+  public onCompleted?: () => void;
 
   private lanesDirty = false;
   private autoInterconnectsDirty = false;
@@ -77,22 +80,6 @@ export class EditOperation {
     device.lane = canonical(lane);
     lane.insertDevice(device);
     module.insertDevice(device);
-
-    // TODO: Make dynamic.
-    const makePinLayout = (p: PinDecl, i: number, location: PinLocation): PinLayout => {
-      // TODO: Move!!!
-      const pinType = this.makeType(p.type);
-      const editableValue = StorageEditableValue.fromType(p.label, p.type, { getTypeLayout: this.makeType.bind(this) });
-      // console.log(editableValue);
-
-      const source = new DevicePinSource(device, location, i);
-      source.storageEditableValue = editableValue;
-      const pin = new PinLayout(source, location, p);
-      pin.type = pinType;
-      return pin;
-    };
-    device.inPins.push(...init.decl.inPins.map((p, i) => makePinLayout(p, i, PinLocation.In)));
-    device.outPins.push(...init.decl.outPins.map((p, i) => makePinLayout(p, i, PinLocation.Out)));
 
     this.editedLanes.add(canonical(lane));
     this.editedDevices.add(canonical(device));
@@ -162,6 +149,33 @@ export class EditOperation {
     module.removeInterconnect(interconnect);
   }
 
+  applyDecls(devices: DeviceDecl[]) {
+    const {
+      allDevices,
+      allLanes,
+      allPins,
+      allInterconnects,
+      deviceDeclMap,
+      typeDeclMap,
+    } = collectAll(this.module);
+    const newPinDecls: PinDecl[] = utils.unique([
+      ...devices.flatMap(d => d.inPins.concat(d.outPins)),
+    ]);
+    const newTypeDecls: TypeSpec[] = utils.unique([
+      ...newPinDecls.flatMap(p => p.type),
+    ]);
+    const newDeviceDeclsMap = toDeclMap(devices);
+    const newTypeDeclsMap = toDeclMap(newTypeDecls);
+    const newDecls = {
+      deviceDeclsMap: newDeviceDeclsMap,
+      typeDeclsMap: newTypeDeclsMap,
+    };
+
+    for (const device of allDevices) {
+      device.applyDecls(newDecls);
+    }
+  }
+
   write(f: () => void) {
     if (this.isContinuous) {
       this.continuousApplyFunc = f;
@@ -195,10 +209,16 @@ export class EditOperation {
       } else {
         this.cleanup();
       }
+      this.onCommitted?.();
+    } catch (e) {
+      // Webpack doesn't report the actual error, so log it here.
+      console.error(e);
+      throw e;
     } finally {
       if (EditOperation.continuousEdit === this) {
         EditOperation.continuousEdit = undefined;
       }
+      this.onCompleted?.();
     }
   }
 
@@ -473,7 +493,8 @@ export class EditOperation {
     const startLane = view(startSource.lane);
     const endLane = view(endSource.lane);
 
-    const midX = (Math.round((startSource.x + endSource.x) / 2)) | 0;
+    const debugFakeBias = startSource.laneLocalY / 8;
+    const midX = ((Math.round((startSource.x + endSource.x) / 2)) | 0) + debugFakeBias;
 
     if (!startLane || !endLane) {
       return;
@@ -481,37 +502,37 @@ export class EditOperation {
     const newPoints: PathPoint[] = [];
     newPoints.push({
       lane: startLane,
-      laneLocalY: startSource.laneLocalY + 0.5,
+      laneLocalY: startSource.laneLocalY + 0.5 + debugFakeBias,
       x: startSource.x,
       xLocalX: 0,
     });
     newPoints.push({
       lane: startLane,
-      laneLocalY: startSource.laneLocalY + 0.5,
+      laneLocalY: startSource.laneLocalY + 0.5 + debugFakeBias,
       x: midX,
       xLocalX: 0.5,
     });
     newPoints.push({
       lane: endLane,
-      laneLocalY: endSource.laneLocalY + 0.5,
+      laneLocalY: endSource.laneLocalY + 0.5 + debugFakeBias,
       x: midX,
       xLocalX: 0.5,
     });
     newPoints.push({
       lane: endLane,
-      laneLocalY: endSource.laneLocalY + 0.5,
+      laneLocalY: endSource.laneLocalY + 0.5 + debugFakeBias,
       x: endSource.x,
       xLocalX: 0,
     });
     return newPoints;
   }
 
-  private makeType(typeSpec: TypeSpec) {
-    // TODO: Implement!
-    const type = new TypeLayout();
-    type.typeSpec = typeSpec;
-    return type;
-  }
+  // private makeType(typeSpec: TypeSpec) {
+  //   // TODO: Implement!
+  //   const type = new TypeLayout();
+  //   type.typeSpec = typeSpec;
+  //   return type;
+  // }
 }
 
 class DevicePositionUpdate {

@@ -1,7 +1,9 @@
-import { MultiMap } from "../collections";
+import { syncLists, MultiMap } from "../collections";
 import { BusLaneLayout } from "./bus-lane-layout";
-import { ModuleLayout } from "./module-layout";
-import { PinLayout } from "./pin-layout";
+import { toCodeRefMapKey } from "./code-refs";
+import { ModuleLayout, NewDecls } from "./module-layout";
+import { PinLayout, PinLocation } from "./pin-layout";
+import { DevicePinSource, StorageEditableValue } from "./pin-sources";
 import { TrackLaneLayout } from "./track-lane-layout";
 import { orRef } from "./utils";
 
@@ -33,7 +35,7 @@ export interface TypeSpec {
 
 export interface PinDecl {
   label: string;
-  codeRef: CodeRef;
+  identifier: string;
   type: TypeSpec;
 }
 
@@ -44,9 +46,9 @@ export interface DeviceDecl {
   outPins: PinDecl[];
 }
 
-export class TypeLayout {
-  typeSpec: TypeSpec = { codeRef: { module: {}, identifier: '' } };
-}
+// export class TypeLayout {
+//   typeSpec: TypeSpec = { codeRef: { module: {}, identifier: '' } };
+// }
 
 export class DeviceLayout {
   x: number = 0.0;
@@ -63,7 +65,53 @@ export class DeviceLayout {
   continuousEdit?: DeviceEditLayout;
   get editType() { return DeviceEditLayout; };
 
-  constructor(readonly module: ModuleLayout, readonly uniqueKey: string, readonly decl: DeviceDecl) {}
+  constructor(readonly module: ModuleLayout, readonly uniqueKey: string, public decl: DeviceDecl) {
+    syncPins.call(this, decl);
+  }
+
+  applyDecls(newDecls: NewDecls) {
+    const key = toCodeRefMapKey(this.decl.codeRef);
+    const newDecl = newDecls.deviceDeclsMap.get(key);
+    if (newDecl) {
+      const oldDecl = this.decl;
+      this.decl = newDecl;
+      syncPins.call(this, newDecl, newDecls);
+    }
+    for (const pin of this.inPins.concat(this.outPins)) {
+      pin.source.applyDecls(newDecls);
+    }
+  }
+}
+
+function syncPins(this: DeviceLayout, newDecl: DeviceDecl, newDecls?: NewDecls) {
+  syncPinList.call(this, newDecl.inPins, this.inPins, PinLocation.In, newDecls);
+  syncPinList.call(this, newDecl.outPins, this.outPins, PinLocation.Out, newDecls);
+}
+
+function syncPinList(this: DeviceLayout, fromPins: PinDecl[], toPins: PinLayout[], location: PinLocation, newDecls?: NewDecls) {
+  syncLists({
+    from: fromPins,
+    to: toPins,
+    theirKey: p => p.identifier,
+    ourKey: l => l.decl.identifier,
+    newOurs: (p, i) => {
+      const editableValue = StorageEditableValue.fromType(p.label, p.type, {});
+      const source = new DevicePinSource(this, location, i);
+      source.storageEditableValue = editableValue;
+      const l = new PinLayout(source, location, p);
+      source.pin = l;
+      return l;
+    },
+    retainOurs: (p, l, oldIndex, newIndex) => {
+      l.decl = p;
+      if (l.source instanceof DevicePinSource) {
+        l.source.pinIndex = newIndex;
+      }
+      if (newDecls) {
+        l.source.applyDecls(newDecls);
+      }
+    },
+  });
 }
 
 export class DeviceEditLayout implements DeviceLayout {
@@ -95,6 +143,8 @@ export class DeviceEditLayout implements DeviceLayout {
   get outPins(): PinLayout[] { return this.shadowOf.outPins; }
 
   toString(): string { return this.shadowOf.toString(); }
+
+  applyDecls(newDecls: NewDecls) { return this.shadowOf.applyDecls(newDecls); }
 
   readonly continuousEdit = this;
   get editType() { return DeviceEditLayout; };

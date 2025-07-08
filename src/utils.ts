@@ -48,6 +48,76 @@ export class WaitableFlag {
   }
 }
 
+export class WaitableValue<T> {
+  readonly skipEqual;
+  private _currentValue: T;
+  private _latestValue: T;
+
+  get currentValue() { return this._currentValue; }
+  get latestValue() { return this._latestValue; }
+
+  private queueHead: Promise<unknown> = Promise.resolve();
+  private nextResult = new Resolvable<T>();
+
+  constructor(initial: T, options?: { skipEqual?: boolean; }) {
+    this._currentValue = initial;
+    this._latestValue = initial;
+    this.skipEqual = options?.skipEqual ?? true;
+  }
+
+  set(value: T) {
+    if (this.skipEqual && this._latestValue === value) {
+      return;
+    }
+    this._latestValue = value;
+    const oldQueueHead = this.queueHead;
+    this.queueHead = (async () => {
+      try {
+        await oldQueueHead;
+      } finally {
+        const oldResult = this.nextResult;
+        this.nextResult = new Resolvable<T>();
+        this._currentValue = value;
+        oldResult.resolve(value);
+        await oldResult.promise.finally();
+      }
+    })();
+  }
+
+  async *stream(): AsyncGenerator<T> {
+    while (true) {
+      yield await this.nextResult.promise;
+    }
+  }
+
+  listen(
+    onfulfilled?: ((value: T) => unknown) | undefined | null,
+  ) {
+    (async () => {
+      for await (const result of this.stream()) {
+        onfulfilled?.(result);
+      }
+    })();
+  }
+
+  then<TResult1 = T, TResult2 = never>(
+    onfulfilled?: ((value: T) => TResult1 | PromiseLike<TResult1>) | undefined | null,
+    onrejected?: ((reason: any) => TResult2 | PromiseLike<TResult2>) | undefined | null,
+  ): Promise<TResult1 | TResult2> {
+    return this.nextResult.promise.then(onfulfilled, onrejected);
+  }
+  catch<TResult = never>(
+    onrejected?: ((reason: any) => TResult | PromiseLike<TResult>) | undefined | null,
+  ): Promise<T | TResult> {
+    return this.nextResult.promise.catch(onrejected);
+  }
+  finally(
+    onfinally?: (() => void) | undefined | null,
+  ): Promise<T> {
+    return this.nextResult.promise.finally(onfinally);
+  }
+}
+
 export class OperationQueue {
   private head = Promise.resolve();
 

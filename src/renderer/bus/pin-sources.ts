@@ -1,12 +1,14 @@
 import { action, observable, runInAction } from "mobx";
 import { BusLaneLayout } from "./bus-lane-layout";
-import { DeviceLayout, TypeLayout, TypeSpec } from "./device-layout";
+import { DeviceLayout, TypeSpec } from "./device-layout";
 import { EditableValue, EditableValueOptions, IntrinsicValueType, IntrinsicValueValue, MultiValueState } from "./editable-value";
 import { PinSource, PinLocation, ExportLocation, PinLayout } from "./pin-layout";
 import { view, canonical } from "./utils";
+import { toCodeRefMapKey } from "./code-refs";
+import { NewDecls } from "./module-layout";
 
 export class DevicePinSource implements PinSource {
-  constructor(readonly device: DeviceLayout, readonly location: PinLocation, readonly pinIndex: number) {}
+  constructor(readonly device: DeviceLayout, readonly location: PinLocation, public pinIndex: number) {}
 
   pin?: PinLayout;
   storageEditableValue?: StorageEditableValue;
@@ -44,8 +46,12 @@ export class DevicePinSource implements PinSource {
     return interconnect?.getExportLocation();
   }
 
+  applyDecls(newDecls: NewDecls) {
+    this.storageEditableValue?.applyDecls(newDecls);
+  }
+
   static toJson() {}
-  static fromJson(instance: DevicePinSource, host: { getTypeLayout(typeSpec: TypeSpec): TypeLayout }) {
+  static fromJson(instance: DevicePinSource, host: {}) {
     console.log('DevicePinSource', 'fromJson', instance);
   }
 }
@@ -77,8 +83,10 @@ export class BusLaneEphemeralPinSource implements PinSource {
     return this.deviceOutPin.source.getExportLocation?.();
   }
 
+  applyDecls(newDecls: NewDecls) {}
+
   static toJson() {}
-  static fromJson(instance: BusLaneEphemeralPinSource, host: { getTypeLayout(typeSpec: TypeSpec): TypeLayout }) {
+  static fromJson(instance: BusLaneEphemeralPinSource, host: {}) {
     console.log('BusLaneEphemeralPinSource', 'fromJson', instance);
   }
 }
@@ -93,13 +101,14 @@ export class BusLaneEphemeralPinSource implements PinSource {
 
 
 
+type StorageEditableValueNode = StorageEditableValueStructNode | StorageEditableValueFieldNode;
 
 export class StorageEditableValue implements EditableValue {
   constructor(
     readonly label: string,
-    readonly valueType: TypeLayout,
-    readonly rootState: Record<string, any>,
-    readonly rootValue: EditableValue,
+    public valueType: TypeSpec,
+    public rootState: Record<string, any>,
+    public rootValue: StorageEditableValueNode,
   ) {}
 
   getChildren() { return this.rootValue.getChildren(); }
@@ -109,25 +118,34 @@ export class StorageEditableValue implements EditableValue {
   getObservableOptions() { return this.rootValue.getObservableOptions(); }
   get multiValueState() { return this.rootValue.multiValueState; }
 
+  applyDecls(newDecls: NewDecls) {
+    const state = this.rootState;
+    const children: StorageEditableValueNode[] = [];
+    addFieldRec(state, children, this.label, this.valueType, { newTypeMap: newDecls.typeDeclsMap });
+    const rootValue = children[0];
+    this.valueType = rootValue.valueType;
+    this.rootValue = rootValue;
+  }
+
   static toJson(instance: StorageEditableValue) {
     delete (instance as any)['rootValue'];
     return instance;
   }
-  static fromJson(instance: StorageEditableValue, host: { getTypeLayout(typeSpec: TypeSpec): TypeLayout }) {
+  static fromJson(instance: StorageEditableValue, host: {}) {
     console.log('StorageEditableValue', 'fromJson', instance);
 
     const state = observable(instance.rootState);
-    const children: EditableValue[] = [];
-    addFieldRec(state, children, instance.label, instance.valueType.typeSpec, host);
+    const children: StorageEditableValueNode[] = [];
+    addFieldRec(state, children, instance.label, instance.valueType);
     const rootValue = children[0];
-    (instance as any).valueType = rootValue.valueType;
-    (instance as any).rootState = state;
-    (instance as any).rootValue = rootValue;
+    instance.valueType = rootValue.valueType;
+    instance.rootState = state;
+    instance.rootValue = rootValue;
   }
-  static fromType(label: string, type: TypeSpec, host: { getTypeLayout(typeSpec: TypeSpec): TypeLayout }): StorageEditableValue {
+  static fromType(label: string, type: TypeSpec, host: {}): StorageEditableValue {
     const state = observable({});
-    const children: EditableValue[] = [];
-    addFieldRec(state, children, label, type, host);
+    const children: StorageEditableValueNode[] = [];
+    addFieldRec(state, children, label, type);
     const rootValue = children[0];
     return new StorageEditableValue(label, rootValue.valueType, state, rootValue);
   }
@@ -138,8 +156,8 @@ class StorageEditableValueStructNode implements EditableValue {
 
   constructor(
     readonly label: string,
-    readonly valueType: TypeLayout,
-    readonly childEditables: EditableValue[],
+    readonly valueType: TypeSpec,
+    readonly childEditables: StorageEditableValueNode[],
   ) {}
   getChildren() { return this.childEditables; }
   getObservableValue<T extends IntrinsicValueType>(type: T): IntrinsicValueValue<T>|undefined { return; }
@@ -153,7 +171,7 @@ class StorageEditableValueFieldNode implements EditableValue {
 
   constructor(
     readonly key: string,
-    readonly valueType: TypeLayout,
+    readonly valueType: TypeSpec,
     private readonly parentState: Record<string, any>,
   ) {}
   get label() { return this.key; }
@@ -183,9 +201,18 @@ class StorageEditableValueFieldNode implements EditableValue {
   }
 }
 
-function addFieldRec(parentState: Record<string, any>, parentChildEditables: EditableValue[], key: string, fieldType: TypeSpec, host: { getTypeLayout(typeSpec: TypeSpec): TypeLayout }) {
+function addFieldRec(
+  parentState: Record<string, any>,
+  parentChildEditables: StorageEditableValueNode[],
+  key: string,
+  fieldType: TypeSpec,
+  options?: {
+    newTypeMap: Map<string, TypeSpec>;
+  },
+) {
+  fieldType = options?.newTypeMap.get(toCodeRefMapKey(fieldType.codeRef)) ?? fieldType;
   if (fieldType.struct) {
-    const childEditables: EditableValue[] = [];
+    const childEditables: StorageEditableValueNode[] = [];
     // const editableValue: EditableValue = {
     //   label: key,
     //   valueType: host.getTypeLayout(fieldType),
@@ -197,17 +224,23 @@ function addFieldRec(parentState: Record<string, any>, parentChildEditables: Edi
     //   multiValueState: MultiValueState.SingleValue
     // };
     parentChildEditables.push(new StorageEditableValueStructNode(
-      key, host.getTypeLayout(fieldType), childEditables));
+      key, fieldType, childEditables));
 
-    parentState[key] = {};
+    const oldState = parentState[key];
+    if (typeof oldState !== 'object') {
+      parentState[key] = {};
+    }
     const childState = parentState[key];
     for (const [k, v] of Object.entries(fieldType.struct.fields)) {
-      addFieldRec(childState, childEditables, k, v, host);
+      addFieldRec(childState, childEditables, k, v, options);
     }
   } else {
-    parentState[key] = 0.3456;
+    const oldState = parentState[key];
+    if (typeof oldState !== 'number') {
+      parentState[key] = 0.3456;
+    }
     const editableValue = new StorageEditableValueFieldNode(
-      key, host.getTypeLayout(fieldType), parentState
+      key, fieldType, parentState
     );
     // const editableValue: EditableValue = {
     //   label: key,

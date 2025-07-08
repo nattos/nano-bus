@@ -1,4 +1,5 @@
-import { TypeLayout } from "./device-layout";
+import { TypeSpec } from "./device-layout";
+import { NewDecls } from "./module-layout";
 
 export enum MultiValueState {
   SingleValue = 'SingleValue',
@@ -20,7 +21,7 @@ export interface EditableValueOptions {
 
 export interface EditableValue {
   label: string;
-  valueType: TypeLayout;
+  valueType: TypeSpec;
   getChildren(): EditableValue[]|undefined;
   getObservableValue<T extends typeof Number>(type: T): IntrinsicValueValue<T>|undefined;
   setObservableValue<T extends typeof Number>(type: T, value: IntrinsicValueValue<T>): void;

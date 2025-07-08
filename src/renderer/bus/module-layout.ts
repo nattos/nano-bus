@@ -1,6 +1,7 @@
 import * as utils from "../../utils";
 import { BusLaneLayout, isBusLane } from "./bus-lane-layout";
-import { DeviceDecl, DeviceLayout, PinDecl, TypeLayout, TypeSpec } from "./device-layout";
+import { CodeRefMapKey, toCodeRefMapKey } from "./code-refs";
+import { CodeRef, DeviceDecl, DeviceLayout, PinDecl, TypeSpec } from "./device-layout";
 import { InterconnectLayout } from "./interconnect-layout";
 import { LaneLayout } from "./lane-layout";
 import { PinLayout } from "./pin-layout";
@@ -81,14 +82,22 @@ export class ModuleEditLayout implements ModuleLayout {
   }
 }
 
-export function moduleToJson(module: ModuleLayout): string {
+export interface NewDecls {
+  deviceDeclsMap: Map<string, DeviceDecl>;
+  typeDeclsMap: Map<string, TypeSpec>;
+}
+
+export function collectAll(module: ModuleLayout) {
+  const allDevices = Array.from(module.allDevices);
+  const allLanes = Array.from(module.lanes);
+  const allInterconnects = Array.from(module.allInterconnects);
   const allPins: PinLayout[] = utils.unique([
-    ...module.allDevices.flatMap(d => d.inPins.concat(d.outPins)),
-    ...module.lanes.filter(isBusLane).flatMap(l => l.importPins.concat(l.exportPins)),
+    ...allDevices.flatMap(d => d.inPins.concat(d.outPins)),
+    ...allLanes.filter(isBusLane).flatMap(l => l.importPins.concat(l.exportPins)),
   ]);
 
   const allDeviceDecls: DeviceDecl[] = utils.unique([
-    ...module.allDevices.map(d => d.decl),
+    ...allDevices.map(d => d.decl),
   ]);
   const allPinDecls: PinDecl[] = utils.unique([
     ...allPins.flatMap(d => d.decl),
@@ -96,31 +105,19 @@ export function moduleToJson(module: ModuleLayout): string {
   const allTypeDecls: TypeSpec[] = utils.unique([
     ...allPinDecls.flatMap(p => p.type),
   ]);
+  const deviceDeclMap = new Map(allDeviceDecls.map(decl => [toCodeRefMapKey(decl.codeRef), decl]));
+  const typeDeclMap = new Map(allTypeDecls.map(decl => [toCodeRefMapKey(decl.codeRef), decl]));
 
-  const baseJsonObject = {
-    lanes: module.lanes,
-    allDevices: module.allDevices,
-    allInterconnects: module.allInterconnects,
-    allPins: allPins,
-    deviceDecls: allDeviceDecls,
-    pinDecls: allPinDecls,
-    typeDecls: allTypeDecls,
-  };
-  const baseFieldsSet = new Set([
-    module,
-    baseJsonObject,
-    ...Object.values(baseJsonObject),
-  ]);
   const moduleRefs = new Map([module].map((v, i) => {
     return [v, { '$ref': 'm', key: i }];
   }));
-  const laneRefs = new Map(module.lanes.map((v, i) => {
+  const laneRefs = new Map(allLanes.map((v, i) => {
     return [v, { '$ref': 'l', key: i }];
   }));
-  const deviceRefs = new Map(module.allDevices.map((v, i) => {
+  const deviceRefs = new Map(allDevices.map((v, i) => {
     return [v, { '$ref': 'd', key: i }];
   }));
-  const interconnectRefs = new Map(module.allInterconnects.map((v, i) => {
+  const interconnectRefs = new Map(allInterconnects.map((v, i) => {
     return [v, { '$ref': 'ic', key: i }];
   }));
   const pinRefs = new Map(allPins.map((v, i) => {
@@ -136,6 +133,69 @@ export function moduleToJson(module: ModuleLayout): string {
   const typeDeclRefs = new Map(allTypeDecls.map((v, i) => {
     return [v, { '$ref': 'td', key: i }];
   }));
+
+  return {
+    allDevices,
+    allLanes,
+    allPins,
+    allInterconnects,
+    allDeviceDecls,
+    allPinDecls,
+    allTypeDecls,
+    deviceDeclMap,
+    typeDeclMap,
+
+    moduleRefs,
+    laneRefs,
+    deviceRefs,
+    interconnectRefs,
+    pinRefs,
+    deviceDeclRefs,
+    pinDeclRefs,
+    typeDeclRefs,
+  };
+}
+
+export function toDeclMap<T extends { codeRef: CodeRef }>(decls: Array<T>): Map<CodeRefMapKey, T> {
+  return new Map(decls.map(decl => [toCodeRefMapKey(decl.codeRef), decl]));
+}
+
+export function moduleToJson(module: ModuleLayout): string {
+  const {
+    allDevices,
+    allLanes,
+    allPins,
+    allInterconnects,
+    allDeviceDecls,
+    allPinDecls,
+    allTypeDecls,
+    deviceDeclMap,
+    typeDeclMap,
+
+    moduleRefs,
+    laneRefs,
+    deviceRefs,
+    interconnectRefs,
+    pinRefs,
+    deviceDeclRefs,
+    pinDeclRefs,
+    typeDeclRefs,
+  } = collectAll(module);
+
+  const baseJsonObject = {
+    lanes: allLanes,
+    allDevices: allDevices,
+    allInterconnects: allInterconnects,
+    allPins: allPins,
+    deviceDecls: allDeviceDecls,
+    pinDecls: allPinDecls,
+    typeDecls: allTypeDecls,
+  };
+  const baseFieldsSet = new Set([
+    module,
+    baseJsonObject,
+    ...Object.values(baseJsonObject),
+  ]);
 
   function replacer(this: any, key: string, value: any) {
     if (baseFieldsSet.has(this)) {
@@ -288,12 +348,12 @@ export function moduleFromJson(text: string) {
     }
     Object.setPrototypeOf(newObject, objectClass.prototype);
     objectClass.fromJson(newObject as any, {
-      getTypeLayout: (typeSpec: TypeSpec) => {
-        // TODO: Implement!
-        const type = new TypeLayout();
-        type.typeSpec = typeSpec;
-        return type;
-      },
+      // getTypeLayout: (typeSpec: TypeSpec) => {
+      //   // TODO: Implement!
+      //   const type = new TypeLayout();
+      //   type.typeSpec = typeSpec;
+      //   return type;
+      // },
     });
   }
 

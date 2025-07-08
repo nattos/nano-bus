@@ -1,3 +1,4 @@
+import * as utils from '../utils';
 
 // type VarArgs = readonly unknown[];
 
@@ -161,6 +162,71 @@ export class ShadowSet<TValue, TValueSet extends Disposable> {
 }
 
 
+export interface SyncListsAccessors<TTheirs, TOurs, TKey = TTheirs> {
+  theirKey(v: TTheirs): TKey;
+  ourKey(v: TOurs): TKey;
+  newOurs(v: TTheirs, newIndex: number): TOurs;
+  retainOurs?(theirs: TTheirs, ours: TOurs, oldIndex: number, newIndex: number): void;
+  syncOurs?(theirs: TTheirs, ours: TOurs, index: number): void;
+  deleteOurs?(v: TOurs, oldIndex: number): void;
+};
+
+export function syncLists<TTheirs, TOurs, TKey = TTheirs>(
+  accessors: {
+    from: TTheirs[],
+    to: TOurs[],
+  } & SyncListsAccessors<TTheirs, TOurs, TKey>,
+) {
+  const from = accessors.from;
+  const to = accessors.to;
+  const ourKeyIndexMap = new Map(to.map((v, i) => {
+    return [accessors.ourKey(v), i];
+  }));
+  const unusedOurIndexSet = new Set(utils.range(to.length));
+
+  const newOurs: TOurs[] = [];
+  const retainedOurs: [TOurs, TTheirs, number, number][] = [];
+  for (const theirs of from) {
+    const theirIndex = newOurs.length;
+    const key = accessors.theirKey(theirs);
+    const ourIndex = ourKeyIndexMap.get(key);
+    let ours;
+    if (ourIndex !== undefined) {
+      ourKeyIndexMap.delete(key);
+      unusedOurIndexSet.delete(ourIndex);
+      ours = to[ourIndex];
+      retainedOurs.push([ours, theirs, ourIndex, theirIndex]);
+    } else {
+      ours = accessors.newOurs(theirs, theirIndex);
+    }
+    newOurs.push(ours);
+  }
+
+  const removedOurs = Array.from(unusedOurIndexSet).map(i => [to[i], i] as const);
+  for (let i = 0; i < newOurs.length; ++i) {
+    if (to[i] !== newOurs[i]) {
+      to[i] = newOurs[i];
+    }
+  }
+  if (newOurs.length < to.length) {
+    to.splice(newOurs.length);
+  }
+  if (accessors.retainOurs) {
+    for (const [ours, theirs, oldIndex, newIndex] of retainedOurs) {
+      accessors.retainOurs(theirs, ours, oldIndex, newIndex);
+    }
+  }
+  if (accessors.deleteOurs) {
+    for (const [ours, oldIndex] of removedOurs) {
+      accessors.deleteOurs(ours, oldIndex);
+    }
+  }
+  if (accessors.syncOurs) {
+    for (let i = 0; i < newOurs.length; ++i) {
+      accessors.syncOurs(from[i], newOurs[i], i);
+    }
+  }
+}
 
 
 

@@ -1,8 +1,10 @@
 import * as utils from "../../utils";
-import { TypeLayout, PinDecl, DeviceLayout } from "./device-layout";
+import { toCodeRefMapKey } from "./code-refs";
+import { PinDecl, DeviceLayout } from "./device-layout";
 import { EditableValue } from "./editable-value";
 import { InterconnectLayout } from "./interconnect-layout";
 import { LaneLayout } from "./lane-layout";
+import { NewDecls } from "./module-layout";
 import { canonical, orRef } from "./utils";
 
 // export class RoutePointLayout {
@@ -22,6 +24,7 @@ export interface PinSource {
   get editableValue(): EditableValue|undefined;
   markDirty(): void;
   getExportLocation?(): ExportLocation|undefined;
+  applyDecls(newDecls: NewDecls): void;
   continuousEdit?: PinSource;
 }
 
@@ -40,7 +43,6 @@ export interface BusRef {
 }
 
 export class PinLayout {
-  type?: TypeLayout;
   options: PinOptions = {};
   readonly interconnects: InterconnectLayout[] = [];
 
@@ -54,7 +56,7 @@ export class PinLayout {
   continuousEdit?: PinEditLayout;
   get editType() { return PinEditLayout; };
 
-  constructor(readonly source: PinSource, readonly location: PinLocation, readonly decl: PinDecl) { }
+  constructor(readonly source: PinSource, readonly location: PinLocation, public decl: PinDecl) { }
 }
 
 export class PinEditLayout implements PinLayout {
@@ -63,10 +65,6 @@ export class PinEditLayout implements PinLayout {
   get source(): PinSource { return this.shadowOf.source; }
   get location(): PinLocation { return this.shadowOf.location; }
   get decl(): PinDecl { return this.shadowOf.decl; }
-
-  get type(): TypeLayout | undefined { return orRef(this._type, this.shadowOf.type); }
-  set type(v: TypeLayout | undefined) { this._type = v ?? null; }
-  private _type?: TypeLayout | null;
 
   get options(): PinOptions { return this._options ?? this.shadowOf.options; }
   set options(v: PinOptions) { this._options = v; }

@@ -45,7 +45,7 @@ export class InspectorEditorPanel extends MobxLitElement {
 
   render() {
     if (!this.inspector || this.inspector?.value !== this.value) {
-      if (this.value?.valueType.typeSpec.primitive) {
+      if (this.value?.valueType.primitive) {
         this.inspector = new FloatInspector();
       } else {
         this.inspector = new StructInspector();
@@ -59,7 +59,7 @@ export class InspectorEditorPanel extends MobxLitElement {
     <div class="chip-block pins">
       <div class="landmark-header">
         <div class="landmark-label">${this.value?.label}</div>
-        <div class="landmark-type typespec">${this.value?.valueType.typeSpec.label}</div>
+        <div class="landmark-type typespec">${this.value?.valueType.label}</div>
       </div>
       <div class="chip editor-type">struct</div>
     </div>

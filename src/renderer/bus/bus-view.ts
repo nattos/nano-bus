@@ -20,7 +20,7 @@ import { InterconnectLayout, PathPoint } from './interconnect-layout';
 import { canonical, view } from './utils';
 import { APP_STYLES } from './app-styles';
 import { cssColorFromHash, getPathPointXY } from './layout-utils';
-import { MultiMap, ShadowMap, ShadowSet } from '../collections';
+import { MultiMap, ShadowMap, ShadowSet, syncLists, SyncListsAccessors } from '../collections';
 import { DeviceView } from './device-view';
 import { LaneLayout } from './lane-layout';
 import { BusLaneLayout, isBusLane } from './bus-lane-layout';
@@ -35,6 +35,10 @@ import { MobxLitElement } from '@adobe/lit-mobx/lit-mobx';
 import { BapStaticFunctionSignature, BapStaticType } from '../bap-exports';
 import { BusBapCompiler, BusBapSerializedState } from './bus-bap';
 
+interface ModuleExports {
+  functions: BapStaticFunctionSignature[];
+}
+
 interface CodeLine {
   code: string;
   debugInValues: number[];
@@ -42,6 +46,7 @@ interface CodeLine {
 }
 
 const COMPILE_CACHE_OBJECT_STORE = 'compile-cache';
+const MODULE_STATES_OBJECT_STORE = 'module-states';
 const COMPILE_CACHE_VERSION = '1';
 
 @customElement('bus-view')
@@ -50,7 +55,7 @@ export class BusView extends MobxLitElement {
   static instance?: BusView;
 
   readonly compiler = new BusBapCompiler();
-  private readonly moduleExportsTask = new utils.Resolvable<{ functions: BapStaticFunctionSignature[]; }>();
+  private readonly moduleExportsTask = new utils.WaitableValue<ModuleExports>({ functions: [] });
 
   readonly selectPaths = new SelectPaths();
   readonly monitorEditorPanel = new MonitorEditorPanel();
@@ -68,6 +73,7 @@ export class BusView extends MobxLitElement {
 
   constructor() {
     super();
+
     BusView.instance = this;
     makeObservable(this);
 
@@ -75,6 +81,7 @@ export class BusView extends MobxLitElement {
       const localStore = await idb.openDB('nano-bus', 1, {
         upgrade(database) {
           database.createObjectStore(COMPILE_CACHE_OBJECT_STORE);
+          database.createObjectStore(MODULE_STATES_OBJECT_STORE);
         },
       });
       return localStore;
@@ -85,14 +92,14 @@ export class BusView extends MobxLitElement {
 
     this.compiler.onStateChanged = (event) => {
       if (event.state.module) {
-        this.moduleExportsTask.resolve(event.state.module.exports);
+        this.moduleExportsTask.set(event.state.module.exports);
       }
       if (event.stateChanged) {
         this.compileState = event.state;
         this.saveCompileState();
       }
       if (event.frameRunner && event.frameRunnerChanged) {
-        // event.frameRunner.runnerFunc.runOneFrame();
+        event.frameRunner.runnerFunc.runOneFrame();
       }
     };
   }
@@ -107,8 +114,24 @@ export class BusView extends MobxLitElement {
       }
       this.compiler.deserialize(serialized);
       if (serialized.module) {
-        this.moduleExportsTask.resolve(serialized.module.exports);
+        this.moduleExportsTask.set(serialized.module.exports);
       }
+    });
+  }
+
+  private async loadModuleState() {
+    await this.ioTaskQueue.push(async () => {
+      const localStore = await this.localStore;
+      const serialized: string|undefined =
+          await localStore.get(MODULE_STATES_OBJECT_STORE, 'mymodule');
+      if (!serialized) {
+        // TEST DATA.
+        await this.ready; // Wait for DeviceDecls.
+        this.module = makeTestData(this.moduleExportsTask.latestValue);
+        return;
+      }
+      const restoredModule = moduleFromJson(serialized);
+      this.module = restoredModule;
     });
   }
 
@@ -120,154 +143,28 @@ export class BusView extends MobxLitElement {
     });
   }
 
+  private async saveModuleState() {
+    await this.ioTaskQueue.push(async () => {
+      const localStore = await this.localStore;
+      const serialized = moduleToJson(this.module);
+      await localStore.put(MODULE_STATES_OBJECT_STORE, serialized, 'mymodule');
+    });
+  }
+
   connectedCallback(): void {
     super.connectedCallback();
 
     (async () => {
-      const makePrimitiveGroup = <T extends Record<string, boolean>>(
-        init: {
-          type: string;
-        },
-        types: T,
-      ): Record<keyof T, TypeSpec> => {
-        const entries = utils.objectMapEntries(types, ([k, v]) => {
-          const newType: TypeSpec = {
-            label: k,
-            codeRef: { module: {}, identifier: k, },
-            primitive: {
-              type: init.type,
-            },
-            // isAssignableFrom: (other: TypeSpec) => {
-            //   if (other === newType) {
-            //     return TypeAssignable.SameType;
-            //   }
-            //   if (typeSet.has(other)) {
-            //     return TypeAssignable.WithCoersion;
-            //   }
-            //   return TypeAssignable.NotAssignable;
-            // }
-          };
-          return newType;
-        });
-        const typeSet = new Set(Object.values(entries));
-        return entries;
-      };
+      await this.loadModuleState();
 
-      const { float: floatType } = makePrimitiveGroup({ type: 'float' }, { 'float': true });
-      const { float2: float2Type } = makePrimitiveGroup({ type: 'float2' }, { 'float2': true });
-      const { float4: float4Type, color: colorType } = makePrimitiveGroup({ type: 'float4' }, {
-        'float4': true,
-        'color': true,
-      });
-      const { ['Texture']: textureType } = makePrimitiveGroup({ type: 'Texture' }, { ['Texture']: true });
-
-      const basicTypes = {
-        float: floatType,
-        float2: float2Type,
-        float4: float4Type,
-        color: colorType,
-        Texture: textureType,
-      };
-
-      const makeStructType = <T extends Record<string, TypeSpec>>(
-        init: {
-          label: string;
-          identifier: string;
-        },
-        fields: T,
-      ): TypeSpec => {
-        const newType: TypeSpec = {
-          label: init.label,
-          codeRef: { module: {}, identifier: init.identifier, },
-          struct: {
-            fields: { ...fields }
-          },
-          // isAssignableFrom(other: TypeSpec) {
-          //   return other === newType ? TypeAssignable.SameType : TypeAssignable.NotAssignable;
-          // }
-        };
-        return newType;
-      };
-
-      const staticTypeMap = new Map<string, TypeSpec>();
-      const typeFromStatic = (type: BapStaticType): TypeSpec => {
-        if (type.isLibType) {
-          return (basicTypes as Record<string, TypeSpec>)[type.identifier as string] ?? basicTypes.float;
-        } else {
-          const oldType = staticTypeMap.get(type.identifier);
-          if (oldType) {
-            return oldType;
-          }
-          const newType = makeStructType({ label: type.identifier, identifier: type.identifier }, Object.fromEntries(type.fields.map(t => [ t.identifier, typeFromStatic(t.type) ])));
-          staticTypeMap.set(type.identifier, newType);
-          return newType;
-        }
-      };
-
-
-      const moduleExports = await this.moduleExportsTask.promise;
-
-      const deviceDecls = new Map<string, DeviceDecl>();
-      for (const exported of moduleExports.functions) {
-        const inPins: PinDecl[] = [];
-        for (const field of exported.parameters) {
-          const inPin: PinDecl = {
-            label: field.identifier,
-            codeRef: { module: {}, identifier: field.identifier },
-            type: typeFromStatic(field.type),
-          };
-          inPins.push(inPin);
-        }
-
-        const outPins: PinDecl[] = [];
-        if (exported.returnType && !exported.returnType.isLibType) {
-          for (const field of exported.returnType.fields) {
-            const outPin: PinDecl = {
-              label: field.identifier,
-              codeRef: { module: {}, identifier: field.identifier },
-              type: typeFromStatic(field.type),
-            };
-            outPins.push(outPin);
-          }
-        }
-
-        const deviceDecl: DeviceDecl = {
-          label: exported.identifier,
-          codeRef: { module: {}, identifier: exported.identifier },
-          inPins: inPins,
-          // inPins: [putCodeRef({ label: 'in', type: textureType })],
-          outPins: outPins,
-        };
-        console.log(deviceDecl);
-        deviceDecls.set(exported.identifier, deviceDecl);
-      }
-
-      const textureInDecl = deviceDecls.get('textureIn')!;
-      const findColorGradDecl = deviceDecls.get('findColorGrad')!;
-      const unpackDecl = deviceDecls.get('unpack')!;
-      const drawGradDecl = deviceDecls.get('drawGrad')!;
-      const textureOutDecl = deviceDecls.get('textureOut')!;
-
-      {
-        using edit = new EditOperation(this.module, { isContinuous: true });
+      this.moduleExportsTask.listen((moduleExports) => {
+        using edit = this.startEdit();
         edit.write(() => {
-          const lane1 = edit.insertLane();
-          const lane3 = edit.insertBusLane();
-          const lane2 = edit.insertLane();
-          const textureIn = edit.insertDevice({ lane: lane1, x: 2, decl: textureInDecl });
-          const findColorGrad = edit.insertDevice({ lane: lane1, x: 12, decl: findColorGradDecl });
-          const drawGrad = edit.insertDevice({ lane: lane2, x: 10, decl: drawGradDecl });
-          const unpack = edit.insertDevice({ lane: lane1, x: 20, decl: unpackDecl });
-          const textureOut = edit.insertDevice({ lane: lane2, x: 28, decl: textureOutDecl });
-          edit.setPinOptions({ pin: unpack.outPins[0], options: { connectToBus: {} } });
-          edit.setPinOptions({ pin: unpack.outPins[1], options: { connectToBus: {} } });
-          edit.setPinOptions({ pin: unpack.outPins[2], options: { connectToBus: {} } });
-          edit.setPinOptions({ pin: unpack.outPins[3], options: { connectToBus: {} } });
+          const { deviceDecls } = loadDeviceDecls(moduleExports);
+          console.log('edit.applyDecls(deviceDecls)', deviceDecls);
+          edit.applyDecls(Array.from(deviceDecls.values()));
         });
-      }
-      // const json = moduleToJson(this.module);
-      // this.module = moduleFromJson(json);
-      // console.log(this.module);
+      });
 
       this.editorPanelsView.pushEditorPanel(this.monitorEditorPanel, { sticky: true });
 
@@ -318,7 +215,7 @@ export class BusView extends MobxLitElement {
 
       {
         // Find all nodes transitively connected to outputs.
-        const sinkNode = this.module.allDevices[4];
+        const sinkNode = this.module.allDevices.filter(d => d.decl.codeRef.identifier === 'textureOut');
 
         // First gather connections. This lets us smartly break cycles later.
         const inputsMap = new Map<DeviceLayout, DeviceLayout[]>();
@@ -338,7 +235,7 @@ export class BusView extends MobxLitElement {
         // Then collect all active devices, those transitively connected to outputs.
         const activeDevices: DeviceLayout[] = [];
         utils.visitRec(
-          [sinkNode],
+          sinkNode,
           node => inputsMap.get(node) ?? [],
           node => {
             activeDevices.push(node);
@@ -415,7 +312,7 @@ export class BusView extends MobxLitElement {
           });
           const outputVarInits = device.outPins.map((p, i) => {
             const outputVar = sanitizeIdentifier(`${device.decl.label}${index}_${i}`);
-            const outputField = stringifyCodeRefField(p.decl.codeRef);
+            const outputField = stringifyIdentifier(p.decl.identifier);
             return `${outputField}: ${outputVar}`;
           });
           let varDecls = '';
@@ -450,7 +347,7 @@ export class BusView extends MobxLitElement {
     });
   }
 
-  startEdit(options: ConstructorParameters<typeof EditOperation>[1]): EditOperation {
+  startEdit(options?: ConstructorParameters<typeof EditOperation>[1]): EditOperation {
     const op = new EditOperation(this.module, options);
     op.onLanesEdited = (lanes) => {
       this.requestUpdate();
@@ -462,6 +359,9 @@ export class BusView extends MobxLitElement {
     };
     op.onInterconnectsEdited = () => {
       this.requestUpdate();
+    };
+    op.onCommitted = () => {
+      this.saveModuleState();
     };
     return op;
   }
@@ -596,6 +496,158 @@ function stringifyCodeRefField(codeRef: CodeRef) {
   return codeRef.identifier;
 }
 
+function stringifyIdentifier(identifier: string) {
+  return identifier;
+}
+
 function stringifyCodeRefGlobal(codeRef: CodeRef) {
   return codeRef.identifier;
+}
+
+function loadDeviceDecls(moduleExports: ModuleExports) {
+  const makePrimitiveGroup = <T extends Record<string, boolean>>(
+    init: {
+      type: string;
+    },
+    types: T,
+  ): Record<keyof T, TypeSpec> => {
+    const entries = utils.objectMapEntries(types, ([k, v]) => {
+      const newType: TypeSpec = {
+        label: k,
+        codeRef: { module: {}, identifier: k, },
+        primitive: {
+          type: init.type,
+        },
+        // isAssignableFrom: (other: TypeSpec) => {
+        //   if (other === newType) {
+        //     return TypeAssignable.SameType;
+        //   }
+        //   if (typeSet.has(other)) {
+        //     return TypeAssignable.WithCoersion;
+        //   }
+        //   return TypeAssignable.NotAssignable;
+        // }
+      };
+      return newType;
+    });
+    const typeSet = new Set(Object.values(entries));
+    return entries;
+  };
+
+  const { float: floatType } = makePrimitiveGroup({ type: 'float' }, { 'float': true });
+  const { float2: float2Type } = makePrimitiveGroup({ type: 'float2' }, { 'float2': true });
+  const { float4: float4Type, color: colorType } = makePrimitiveGroup({ type: 'float4' }, {
+    'float4': true,
+    'color': true,
+  });
+  const { ['Texture']: textureType } = makePrimitiveGroup({ type: 'Texture' }, { ['Texture']: true });
+
+  const basicTypes = {
+    float: floatType,
+    float2: float2Type,
+    float4: float4Type,
+    color: colorType,
+    Texture: textureType,
+  };
+
+  const makeStructType = <T extends Record<string, TypeSpec>>(
+    init: {
+      label: string;
+      identifier: string;
+    },
+    fields: T,
+  ): TypeSpec => {
+    const newType: TypeSpec = {
+      label: init.label,
+      codeRef: { module: {}, identifier: init.identifier, },
+      struct: {
+        fields: { ...fields }
+      },
+      // isAssignableFrom(other: TypeSpec) {
+      //   return other === newType ? TypeAssignable.SameType : TypeAssignable.NotAssignable;
+      // }
+    };
+    return newType;
+  };
+
+  const staticTypeMap = new Map<string, TypeSpec>();
+  const typeFromStatic = (type: BapStaticType): TypeSpec => {
+    if (type.isLibType) {
+      return (basicTypes as Record<string, TypeSpec>)[type.identifier as string] ?? basicTypes.float;
+    } else {
+      const oldType = staticTypeMap.get(type.identifier);
+      if (oldType) {
+        return oldType;
+      }
+      const newType = makeStructType({ label: type.identifier, identifier: type.identifier }, Object.fromEntries(type.fields.map(t => [ t.identifier, typeFromStatic(t.type) ])));
+      staticTypeMap.set(type.identifier, newType);
+      return newType;
+    }
+  };
+
+  const deviceDecls = new Map<string, DeviceDecl>();
+  for (const exported of moduleExports.functions) {
+    const inPins: PinDecl[] = [];
+    for (const field of exported.parameters) {
+      const inPin: PinDecl = {
+        label: field.identifier,
+        identifier: field.identifier,
+        type: typeFromStatic(field.type),
+      };
+      inPins.push(inPin);
+    }
+
+    const outPins: PinDecl[] = [];
+    if (exported.returnType && !exported.returnType.isLibType) {
+      for (const field of exported.returnType.fields) {
+        const outPin: PinDecl = {
+          label: field.identifier,
+          identifier: field.identifier,
+          type: typeFromStatic(field.type),
+        };
+        outPins.push(outPin);
+      }
+    }
+
+    const deviceDecl: DeviceDecl = {
+      label: exported.identifier,
+      codeRef: { module: {}, identifier: exported.identifier },
+      inPins: inPins,
+      // inPins: [putCodeRef({ label: 'in', type: textureType })],
+      outPins: outPins,
+    };
+    console.log(deviceDecl);
+    deviceDecls.set(exported.identifier, deviceDecl);
+  }
+  return { deviceDecls };
+}
+
+function makeTestData(moduleExports: ModuleExports): ModuleLayout {
+  const { deviceDecls } = loadDeviceDecls(moduleExports);
+
+  const textureInDecl = deviceDecls.get('textureIn')!;
+  const findColorGradDecl = deviceDecls.get('findColorGrad')!;
+  const unpackDecl = deviceDecls.get('unpack')!;
+  const drawGradDecl = deviceDecls.get('drawGrad')!;
+  const textureOutDecl = deviceDecls.get('textureOut')!;
+
+  const module = new ModuleLayout();
+  {
+    using edit = new EditOperation(module);
+    edit.write(() => {
+      const lane1 = edit.insertLane();
+      const lane3 = edit.insertBusLane();
+      const lane2 = edit.insertLane();
+      const textureIn = edit.insertDevice({ lane: lane1, x: 2, decl: textureInDecl });
+      const findColorGrad = edit.insertDevice({ lane: lane1, x: 12, decl: findColorGradDecl });
+      const drawGrad = edit.insertDevice({ lane: lane2, x: 10, decl: drawGradDecl });
+      const unpack = edit.insertDevice({ lane: lane1, x: 20, decl: unpackDecl });
+      const textureOut = edit.insertDevice({ lane: lane2, x: 28, decl: textureOutDecl });
+      edit.setPinOptions({ pin: unpack.outPins[0], options: { connectToBus: {} } });
+      edit.setPinOptions({ pin: unpack.outPins[1], options: { connectToBus: {} } });
+      edit.setPinOptions({ pin: unpack.outPins[2], options: { connectToBus: {} } });
+      edit.setPinOptions({ pin: unpack.outPins[3], options: { connectToBus: {} } });
+    });
+  }
+  return module;
 }
