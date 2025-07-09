@@ -111,7 +111,7 @@ export class BapFunctionDeclarationVisitor extends BapVisitor {
           isGeneric: isGeneric,
         };
       };
-      this.rootContext.moduleExports.addFunction({ identifier: functionName, isGeneric, signatureGenerator });
+      this.rootContext.moduleExports.addFunction({ identifier: functionName, isGeneric, signatureGenerator, valueGenerator: result });
     }
 
     return result;

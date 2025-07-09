@@ -322,7 +322,7 @@ export class BusView extends MobxLitElement {
           codeLines.push(`${varDecls}${stringifyCodeRefGlobal(device.decl.codeRef)}(${inputVarRefs.join(', ')});`);
         }
         const fullCode = [
-          `function run() {`,
+          `export function run() {`,
           ...codeLines.map(line => `  ${line}`),
           `}`,
         ].join('\n');

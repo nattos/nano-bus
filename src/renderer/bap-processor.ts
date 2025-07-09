@@ -73,8 +73,11 @@ export function initBapProcessor() {
   BapVisitor.mapNodeType(ts.SyntaxKind.ContinueStatement, BapContinueStatementVisitor);
 }
 
-export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitorRootContext, blockWriter: CodeStatementWriter, codeWriter: CodeWriter) {
-  const context = BapGenerateContext.root({context: rootContext, globalWriter: codeWriter, isGpu: true});
+export function writeSourceNodeCode(
+  node: ts.SourceFile,
+  rootContext: BapVisitorRootContext,
+  context: BapGenerateContext,
+) {
   rootContext.types.debug = { debugContext: context };
   const libTypes = new BapLibLoader(rootContext).loadBopLib();
   for (const libType of libTypes) {
@@ -86,10 +89,7 @@ export function writeSourceNodeCode(node: ts.SourceFile, rootContext: BapVisitor
     rootContext.types.addExternType(libType.identifier, libType.tsType, libType.typeGen);
   }
 
-  const resultWriter = new BapGlobalBlockVisitor(rootContext).visitSourceFile(node)?.generateRead(context)?.writeIntoExpression?.(blockWriter);
-  const logCallExpr = blockWriter.writeExpressionStatement().expr.writeMethodCall(codeWriter.makeInternalToken('log'));
-  logCallExpr.source.writeIdentifier(codeWriter.makeInternalToken('console'));
-  resultWriter?.(logCallExpr.addArg());
+  new BapGlobalBlockVisitor(rootContext).visitSourceFile(node)?.generateRead(context);
 
   for (const exported of rootContext.moduleExports.functions) {
     exported.staticSignature = exported.signatureGenerator?.(context, []);

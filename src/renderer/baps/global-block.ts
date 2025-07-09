@@ -49,24 +49,14 @@ export class BapGlobalBlockVisitor extends BapVisitor {
           });
         }
 
-        let lastFuncLiteral: BapFunctionLiteral|undefined;
         for (const stmt of stmts) {
           if (!stmt) {
             continue;
           }
           const result = stmt.generateRead(context);
-          if (result.type === 'function') {
-            lastFuncLiteral = result;
-          }
         }
         return {
-          type: 'literal',
-          typeSpec: lastFuncLiteral?.typeSpec,
-          writeIntoExpression: (prepare) => {
-            if (lastFuncLiteral) {
-              return lastFuncLiteral.resolve([], [])?.writeIntoExpression?.(prepare);
-            }
-          },
+          type: 'statement'
         };
       },
     };

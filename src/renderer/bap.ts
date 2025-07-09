@@ -8,6 +8,7 @@ import { initBapProcessor, writeSourceNodeCode } from './bap-processor';
 import { BapDebugInOuts } from './bap-debug-ins-outs';
 import { BapModuleExports } from './bap-module-exports';
 import { BapDebugInEntry, BapStaticFunctionSignature } from './bap-exports';
+import { BapGenerateContext } from './bap-value';
 
 export interface CompiledDebugIn {
   lineNumber: number;
@@ -39,7 +40,13 @@ const globalReady = utils.lazy(async () => {
   return { libCode };
 });
 
-export async function compile(code: string): Promise<CompileResult> {
+export async function compile(
+  code: string,
+  entryPoints: {
+    invokeAll?: boolean;
+    invokeFuncIdentifiers?: string[];
+  },
+): Promise<CompileResult> {
   const { libCode } = await globalReady();
 
   const compilerHost = new MemoryCompilerHost(new Map<string, string>([
@@ -53,7 +60,8 @@ export async function compile(code: string): Promise<CompileResult> {
     cpuPrepareCode, cpuRunFrameCode, gpuCode,
     cpuDebugIns, gpuDebugIns,
     moduleExports,
-  } = translateProgram({ program, sourceRoot: root });
+    compileMessages,
+  } = translateProgram({ program, sourceRoot: root, entryPoints });
 
   return {
     isRunnable: true,
@@ -66,28 +74,32 @@ export async function compile(code: string): Promise<CompileResult> {
     cpuDebugIns: cpuDebugIns,
     gpuDebugIns: gpuDebugIns,
     debugOuts: [],
-    messages: [],
+    messages: compileMessages,
   };
 }
 
 function translateProgram(init: {
   program: ts.Program,
   sourceRoot: ts.SourceFile,
+  entryPoints: {
+    invokeAll?: boolean;
+    invokeFuncIdentifiers?: string[];
+  },
 }) {
-  const writer = new CodeWriter();
+  const compileMessages: CompileMessage[] = [];
+  const codeWriter = new CodeWriter();
   const prepareFuncs: CodeVariable[] = [];
-  const runFuncs: CodeVariable[] = [];
 
   const tc = init.program.getTypeChecker();
   // sourceRoot.statements.forEach(this.printRec.bind(this));
 
-  const initFuncIdentifier = writer.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, 'init');
-  const initFunc = writer.global.writeFunction(initFuncIdentifier);
+  const initFuncIdentifier = codeWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, 'init');
+  const initFunc = codeWriter.global.writeFunction(initFuncIdentifier);
   initFunc.touchedByCpu = true;
   const initFuncBlockWriter = initFunc.body;
 
-  const runFuncIdentifier = writer.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, 'run');
-  const runFunc = writer.global.writeFunction(runFuncIdentifier);
+  const runFuncIdentifier = codeWriter.global.scope.allocateIdentifier(BapIdentifierPrefix.Function, 'run');
+  const runFunc = codeWriter.global.writeFunction(runFuncIdentifier);
   runFunc.touchedByCpu = true;
   const blockWriter = runFunc.body;
   const runFuncBlockWriter = runFunc.body;
@@ -107,20 +119,47 @@ function translateProgram(init: {
   types = new BapTypes(rootContext);
 
   // Walk the tree.
-  writeSourceNodeCode(init.sourceRoot, rootContext, blockWriter, writer);
+  const context = BapGenerateContext.root({context: rootContext, globalWriter: codeWriter, isGpu: true});
+  writeSourceNodeCode(init.sourceRoot, rootContext, context);
+
   console.log(rootContext.moduleExports.functions);
 
+  // Find and call all requested functions.
+  let invokeFuncIdentifiers: string[];
+  if (init.entryPoints.invokeAll) {
+    invokeFuncIdentifiers = rootContext.moduleExports.functions.map(f => f.identifier);
+  } else {
+    invokeFuncIdentifiers = init.entryPoints.invokeFuncIdentifiers ?? [];
+  }
+  const resolvedInvokeFuncs = invokeFuncIdentifiers.map(identifier => ({ identifier, func: rootContext.moduleExports.functions.find(f => f.identifier === identifier) }));
+  for (const { identifier, func } of resolvedInvokeFuncs) {
+    if (!func) {
+      compileMessages.push({
+        message: `Function ${identifier} not found in compiled result.`
+      });
+      continue;
+    }
+    const funcLiteralResult = func.valueGenerator.generateRead(context);
+    if (funcLiteralResult.type !== 'function') {
+      compileMessages.push({
+        message: `Identifier ${identifier} is not a function.`
+      });
+      continue;
+    }
+    const resultWriter = funcLiteralResult.resolve([], [])?.writeIntoExpression?.(blockWriter);
+    const logCallExpr = blockWriter.writeExpressionStatement().expr.writeMethodCall(codeWriter.makeInternalToken('log'));
+    logCallExpr.source.writeIdentifier(codeWriter.makeInternalToken('console'));
+    resultWriter?.(logCallExpr.addArg());
+  }
+  // Calling functions triggers adding of prepare funcs, so we must read the list afterwards.
   for (const prepareFunc of prepareFuncs) {
     initFuncBlockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(prepareFunc.identifierToken);
   }
-  for (const runFunc of runFuncs) {
-    runFuncBlockWriter.writeExpressionStatement().expr.writeStaticFunctionCall(runFunc.identifierToken);
-  }
 
   const platform = CodeWriterPlatform.WebGPU;
-  const { code: cpuCode, translatedTokens } = writer.getOuterCode(false, platform, { translateTokens: [ initFuncIdentifier, runFuncIdentifier ] });
+  const { code: cpuCode, translatedTokens } = codeWriter.getOuterCode(false, platform, { translateTokens: [ initFuncIdentifier, runFuncIdentifier ] });
   console.log(cpuCode);
-  const { code: gpuCode } = writer.getOuterCode(true, platform);
+  const { code: gpuCode } = codeWriter.getOuterCode(true, platform);
   console.log(gpuCode);
 
   const initFuncName = translatedTokens.get(initFuncIdentifier);
@@ -152,6 +191,7 @@ const instanceVars = {};
     cpuDebugIns: rootContext.debugInOuts.cpuIns,
     gpuDebugIns: rootContext.debugInOuts.gpuIns,
     moduleExports: rootContext.moduleExports,
+    compileMessages: compileMessages,
   };
 }
 

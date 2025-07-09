@@ -3,6 +3,7 @@ import { BapDebugInEntry, BapStaticFunctionSignature, BapStaticType } from '../b
 import { evalJavascriptInContext, PushInternalContinueFlag, SharedMTLInternals } from '../runtime/bop-javascript-lib';
 
 const TEXT_ENCODER = new TextEncoder();
+const NO_CACHE = false;
 
 export interface BusBapSerializedState {
   module?: {
@@ -109,13 +110,13 @@ export class BusBapCompiler {
       return;
     }
     const codeHash = await this.getCodeHash(moduleCode);
-    if (codeHash === this.state.module?.hash) {
+    if (codeHash === this.state.module?.hash && !NO_CACHE) {
       return;
     }
 
     const bap = await this.bapImport();
     const withoutRunCode = await (await fetch('libcode/testcode/test.ts')).text();
-    const precompileResult = await bap.compile(withoutRunCode);
+    const precompileResult = await bap.compile(withoutRunCode, { invokeAll: true });
     const exports = precompileResult.exports;
 
     this.state.module = {
@@ -149,14 +150,14 @@ export class BusBapCompiler {
       return;
     }
     const codeHash = await this.getCodeHash(runCode);
-    if (codeHash === this.state.run?.hash) {
+    if (codeHash === this.state.run?.hash && !NO_CACHE) {
       return;
     }
 
     const moduleCode = this.state.module.code;
     const bap = await this.bapImport();
     const withRunCode = moduleCode + '\n' + runCode;
-    const compileResult = await bap.compile(withRunCode);
+    const compileResult = await bap.compile(withRunCode, { invokeFuncIdentifiers: ['run'] });
 
     const runner: Required<BusBapSerializedState>['run']['runner'] = {
       cpuPrepareCode: compileResult.cpuPrepareCode,
